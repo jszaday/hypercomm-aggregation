@@ -46,7 +46,6 @@ class Transceivers : public CBase_Transceivers<T> {
   }
 
   void send_values(void) {
-    auto mine = this->thisIndex;
     for (auto i = 0; i < nIters; i++) {
       for (auto j = 0; j < nElements; j++) {
         aggregator->send(j, static_cast<T>((i + 1) * (j + 1)));

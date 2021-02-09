@@ -22,18 +22,21 @@ CkpvDeclare(int, _bundleIdx);
 CkpvDeclare(endpoint_registry_t, endpoint_registry_);
 
 void _bundle_handler(void* msg) {
-  envelope *env = (envelope *) msg;
+  envelope* env = static_cast<envelope*>(msg);
   PUP::fromMem p(EnvToUsr(env));
   int nodeLevel, idx, nMsgs;
   p | nodeLevel;
   p | idx;
   p | nMsgs;
-  const auto& reg = nodeLevel ? CkpvAccessOther(endpoint_registry_, 0) : CkpvAccess(endpoint_registry_);
+  const auto& reg = nodeLevel ? CkpvAccessOther(endpoint_registry_, 0)
+                              : CkpvAccess(endpoint_registry_);
   if (static_cast<std::size_t>(idx) >= reg.size()) {
-    CkAbort("Invalid endpoint id, %d. [nodeLevel=%d, node=%d, pe=%d, size=%d]\n", idx, nodeLevel, CkMyNode(), CkMyPe(), env->getTotalsize());
+    CkAbort(
+        "Invalid endpoint id, %d. [nodeLevel=%d, node=%d, pe=%d, size=%d]\n",
+        idx, nodeLevel, CkMyNode(), CkMyPe(), env->getTotalsize());
   }
   const auto& fn = reg[idx];
-  for (std::size_t i = 0; i < nMsgs; i++) {
+  for (auto i = 0; i < nMsgs; i++) {
     CkMarshalledMessage m;
     p | m;
     QdProcess(1);
@@ -51,14 +54,14 @@ static void _on_condition(void* self) {
 void initialize(void) {
   CkpvInitialize(endpoint_registry_t, endpoint_registry_);
   CkpvInitialize(int, _bundleMsg);
-  CkpvAccess(_bundleMsg) = CkRegisterMsg("hypercomm_bundle",0,0,0,0);
+  CkpvAccess(_bundleMsg) = CkRegisterMsg("hypercomm_bundle", 0, 0, 0, 0);
   CkpvInitialize(int, _bundleIdx);
   CkpvAccess(_bundleIdx) = CmiRegisterHandler((CmiHandler)_bundle_handler);
 }
 
 endpoint_id_t register_endpoint_fn(const endpoint_fn_t& fn, bool nodeLevel) {
-  auto& reg = 
-    nodeLevel ? CkpvAccessOther(endpoint_registry_, 0) : CkpvAccess(endpoint_registry_);
+  auto& reg = nodeLevel ? CkpvAccessOther(endpoint_registry_, 0)
+                        : CkpvAccess(endpoint_registry_);
   reg.push_back(fn);
   return reg.size() - 1;
 }
@@ -69,8 +72,7 @@ struct aggregator {
   //   CcdPERIODIC_10ms or CcdPROCESSOR_STILL_IDLE
   // see converse.h for the full listing
   aggregator(int msgThreshold, double flushTimeout,
-             const endpoint_fn_t& endpoint,
-             bool nodeLevel = false,
+             const endpoint_fn_t& endpoint, bool nodeLevel = false,
              int ccsCondition = CcdIGNOREPE)
       : mNodeLevel(nodeLevel),
         mMsgThreshold(msgThreshold),
@@ -88,10 +90,9 @@ struct aggregator {
     mLastFlush.resize(nElements);
 
     if (ccsCondition != CcdIGNOREPE) {
-      CcdCallOnConditionKeep(
-        ccsCondition,
-        reinterpret_cast<CcdVoidFn>(&_on_condition<Ts...>),
-        this);
+      CcdCallOnConditionKeep(ccsCondition,
+                             reinterpret_cast<CcdVoidFn>(&_on_condition<Ts...>),
+                             this);
     }
   }
 
@@ -106,7 +107,7 @@ struct aggregator {
   }
 
   inline bool should_flush(const int& pe) {
-    return (mQueues[pe].size() >= mMsgThreshold) || timed_out(pe);
+    return (mQueues[pe].size() >= static_cast<std::size_t>(mMsgThreshold)) || timed_out(pe);
   }
 
   void flush(const int& pe) {
@@ -128,8 +129,8 @@ struct aggregator {
 
     PUP::sizer ps;
     auto size = pupFn(ps);
-    envelope *env = _allocEnv(CkpvAccess(_bundleMsg), size);
-    PUP::toMem p((char *)EnvToUsr(env));
+    envelope* env = _allocEnv(CkpvAccess(_bundleMsg), size);
+    PUP::toMem p((char*)EnvToUsr(env));
     if (pupFn(p) != size) {
       CkAbort("pup failure");
     }
