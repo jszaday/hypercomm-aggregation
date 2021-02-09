@@ -1,8 +1,8 @@
 
-# The Hypercomm Aggregator
+# Hypercomm::Aggregation Library
 
 ## Introduction
-This is the aggregation/aggregator component of the Hypercomm set of libraries for Charm++. It is currently limited to aggregating messages for `group` and `nodegroup` chare-collectives, but eventually it will be extended to chare-arrays as well. To support chare-arrays, some degree of topological awareness and/or location manager information will be necessary; towards that end, the `VirtualRouter` component of TRAM could be incorporated into this library.
+This is the aggregation/aggregator component of the Hypercomm suite of libraries for Charm++. It is currently limited to aggregating messages for `group` and `nodegroup` chare-collectives, but eventually it will be extended to chare-arrays as well. To support chare-arrays, some degree of topological awareness and/or location manager information will be necessary; towards that end, the `VirtualRouter` component of TRAM could be incorporated into this library.
 
 ## Usage
 To use the library, declare an `initproc` calling `aggregation::initialize` within your `.ci` file:
