@@ -11,7 +11,7 @@ namespace aggregation {
 using endpoint_fn_t = std::function<void(void*)>;
 using endpoint_id_t = std::size_t;
 using endpoint_registry_t = std::vector<endpoint_fn_t>;
-using msg_queue_t = std::vector<CkMarshalledMessage>;
+using msg_queue_t = std::deque<CkMarshalledMessage>;
 
 template <typename... Ts>
 struct aggregator;
@@ -20,22 +20,25 @@ namespace {
 int _bundleIdx;
 CkpvDeclare(endpoint_registry_t, endpoint_registry_);
 
-void _bundle_handler(void* impl_env) {
-  auto env = static_cast<envelope*>(impl_env);
-  auto msg = static_cast<CkMarshallMsg*>(EnvToUsr(env));
-  auto p = PUP::fromMem(msg->msgBuf);
-  endpoint_id_t idx;
-  std::size_t nMsgs;
+void _bundle_handler(void* msg) {
+  envelope *env = (envelope *) msg;
+  PUP::fromMem p(EnvToUsr(env));
+  int nodeLevel, idx, nMsgs;
+  p | nodeLevel;
   p | idx;
   p | nMsgs;
-  const auto& fn = (CkpvAccess(endpoint_registry_))[idx];
-  for (auto i = 0; i < nMsgs; i++) {
+  const auto& reg = nodeLevel ? CkpvAccessOther(endpoint_registry_, 0) : CkpvAccess(endpoint_registry_);
+  if (static_cast<std::size_t>(idx) >= reg.size()) {
+    CkAbort("Invalid endpoint id, %d. [nodeLevel=%d, node=%d, pe=%d, size=%d]\n", idx, nodeLevel, CkMyNode(), CkMyPe(), env->getTotalsize());
+  }
+  const auto& fn = reg[idx];
+  for (std::size_t i = 0; i < nMsgs; i++) {
     CkMarshalledMessage m;
     p | m;
     QdProcess(1);
     fn(m.getMessage());
   }
-  CkFreeMsg(msg);
+  CmiFree(env);
 }
 
 template <typename... Ts>
@@ -46,11 +49,13 @@ static void _on_condition(void* self) {
 
 void initialize(void) {
   CkpvInitialize(endpoint_registry_t, endpoint_registry_);
-  CmiAssignOnce(&_bundleIdx, CmiRegisterHandler((CmiHandler)_bundle_handler));
+  _bundleIdx = CmiRegisterHandler((CmiHandler)_bundle_handler);
+  CkPrintf("[%d] registered bundle idx to %d.\n", CkMyPe(), _bundleIdx);
 }
 
-endpoint_id_t register_endpoint_fn(const endpoint_fn_t& fn) {
-  auto& reg = CkpvAccess(endpoint_registry_);
+endpoint_id_t register_endpoint_fn(const endpoint_fn_t& fn, bool nodeLevel) {
+  auto& reg = 
+    nodeLevel ? CkpvAccessOther(endpoint_registry_, 0) : CkpvAccess(endpoint_registry_);
   reg.push_back(fn);
   return reg.size() - 1;
 }
@@ -67,7 +72,7 @@ struct aggregator {
       : mNodeLevel(nodeLevel),
         mMsgThreshold(msgThreshold),
         mFlushTimeout(flushTimeout) {
-    mEndpoint = register_endpoint_fn(endpoint);
+    mEndpoint = register_endpoint_fn(endpoint, nodeLevel);
 
     if (mNodeLevel) {
       nElements = CkNumNodes();
@@ -103,10 +108,14 @@ struct aggregator {
 
   void flush(const int& pe) {
     auto& queue = mQueues[pe];
-    auto nMsgs = queue.size();
+
+    int ndLvl = static_cast<int>(mNodeLevel);
+    int idx = static_cast<int>(mEndpoint);
+    int nMsgs = static_cast<int>(queue.size());
 
     auto pupFn = [&](PUP::er& p) {
-      p | mEndpoint;
+      p | ndLvl;
+      p | idx;
       p | nMsgs;
       for (auto& msg : queue) {
         p | msg;
@@ -114,21 +123,25 @@ struct aggregator {
       return p.size();
     };
 
-    PUP::sizer s;
-    auto size = pupFn(s);
-    auto msg = CkAllocateMarshallMsg(size);
-    PUP::toMem p(msg->msgBuf);
+    PUP::sizer ps;
+    auto size = pupFn(ps);
+	  envelope *env = _allocEnv(0, size);
+    PUP::toMem p((char *)EnvToUsr(env));
     if (pupFn(p) != size) {
       CkAbort("pup failure");
     }
 
-    envelope* env = UsrToEnv(msg);
-    env->setSrcPe(CkMyPe());
+    CkPrintf("[%d] sent %d bytes with to endpoint %d\n", CkMyPe(), env->getTotalsize(), idx);
+
     CmiSetHandler(env, _bundleIdx);
     if (mNodeLevel) {
-      CmiSyncNodeSendAndFree(pe, env->getTotalsize(), (char*)env);
+      if (pe != CmiMyNode()) {
+        CmiSyncNodeSendAndFree(pe, env->getTotalsize(), env);
+      } else {
+        CsdNodeEnqueue(env);
+      }
     } else {
-      CmiSyncSendAndFree(pe, env->getTotalsize(), (char*)env);
+      CmiSyncSendAndFree(pe, env->getTotalsize(), reinterpret_cast<char*>(env));
     }
 
     mLastFlush[pe] = CkWallTimer();
@@ -170,8 +183,8 @@ struct aggregator {
   double mFlushTimeout;
   endpoint_id_t mEndpoint;
 
-  std::vector<double> mLastFlush;
-  std::vector<msg_queue_t> mQueues;
+  std::deque<double> mLastFlush;
+  std::deque<msg_queue_t> mQueues;
   std::deque<std::mutex> mQueueLocks;
 
   inline void put_msg(const int& pe, CkMessage* msg) {

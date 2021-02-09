@@ -5,28 +5,39 @@
 
 #include <hypercomm/aggregation.hpp>
 
+#ifdef NODE_LEVEL
+bool kNodeLevel = true;
+#else
+bool kNodeLevel = false;
+#endif
+
 template<typename T>
 class Transceivers : public CBase_Transceivers<T> {
   using aggregator_t = aggregation::aggregator<T>;
   std::unique_ptr<aggregator_t> aggregator;
 
-  int nIters, nRecvd;
+  int nIters, nRecvd, nElements;
 
  public:
   Transceivers(int _nIters) : nIters(_nIters), nRecvd(0) {
-    CkCallback endCb(CkIndex_Transceivers<T>::receive_value(0), this->thisProxy[this->thisIndex]);
-    // each pe registers its aggregator (and endpoint)
     aggregator = std::unique_ptr<aggregator_t>(
-        new aggregator_t(nIters / 4, 0.1, [endCb](void* msg) {
-          endCb.send(msg);
-        }));
+        new aggregator_t(nIters / 4, 0.1, [this](void* msg) {
+          CkFreeMsg(msg);
+          this->receive_value(0.0);
+        }, kNodeLevel));
+    if (kNodeLevel) {
+      nElements = CkNumNodes();
+    } else {
+      nElements = CkNumPes();
+    }
   }
 
   void check_count(void) {
-    if (nRecvd >= (nIters * CkNumPes())) {
+    auto nExpected = nIters * nElements;
+    if (nRecvd >= nExpected) {
       this->contribute(CkCallback(CkCallback::ckExit));
     } else {
-      CkAbort("%d did not receive all expected messages!\n", CkMyPe());
+      CkAbort("%d did not receive all expected messages (%d vs. %d)!\n", this->thisIndex, nRecvd, nExpected);
     }
   }
 
@@ -35,9 +46,9 @@ class Transceivers : public CBase_Transceivers<T> {
   }
 
   void send_values(void) {
-    auto mine = CkMyPe();
+    auto mine = this->thisIndex;
     for (auto i = 0; i < nIters; i++) {
-      for (auto j = 0; j < CkNumPes(); j++) {
+      for (auto j = 0; j < nElements; j++) {
         aggregator->send(j, static_cast<T>((i + 1) * (j + 1)));
       }
     }

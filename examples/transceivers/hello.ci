@@ -4,14 +4,22 @@ mainmodule hello {
     };
 
     template<typename Value>
+#ifdef NODE_LEVEL
+    nodegroup Transceivers {
+#else
     group Transceivers {
+#endif
         entry Transceivers(int);
         entry void receive_value(const Value&);
         entry void send_values(void);
         entry void check_count(void);
     }
 
+#ifdef NODE_LEVEL
+    nodegroup Transceivers<double>;
+#else
     group Transceivers<double>;
+#endif
 
     namespace aggregation {
         initproc void initialize(void);
