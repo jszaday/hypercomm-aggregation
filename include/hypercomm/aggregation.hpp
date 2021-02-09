@@ -1,8 +1,10 @@
 #ifndef __HYPERCOMM_AGGREGATION_HPP__
 #define __HYPERCOMM_AGGREGATION_HPP__
 
-#include <ck.h>
 #include <map>
+#include <ck.h>
+#include <deque>
+#include <mutex>
 #include <functional>
 
 namespace aggregation {
@@ -37,8 +39,8 @@ void _bundle_handler(void* impl_env) {
 }
 
 template <typename... Ts>
-static void _when_idle(void* self) {
-  static_cast<aggregator<Ts...>*>(self)->on_idle();
+static void _on_condition(void* self) {
+  static_cast<aggregator<Ts...>*>(self)->on_cond();
 }
 }
 
@@ -55,21 +57,43 @@ endpoint_id_t register_endpoint_fn(const endpoint_fn_t& fn) {
 
 template <typename... Ts>
 struct aggregator {
+  // example conditions may be:
+  //   CcdPERIODIC_10ms or CcdPROCESSOR_STILL_IDLE
+  // see converse.h for the full listing
   aggregator(int msgThreshold, double flushTimeout,
-             const endpoint_fn_t& endpoint)
-      : mMsgThreshold(msgThreshold),
+             const endpoint_fn_t& endpoint,
+             bool nodeLevel = false,
+             int ccsCondition = CcdIGNOREPE)
+      : mNodeLevel(nodeLevel),
+        mMsgThreshold(msgThreshold),
         mFlushTimeout(flushTimeout) {
     mEndpoint = register_endpoint_fn(endpoint);
-    set_cond();
+
+    if (mNodeLevel) {
+      nElements = CkNumNodes();
+      mQueueLocks.resize(nElements);
+    } else {
+      nElements = CkNumPes();
+    }
+
+    mQueues.resize(nElements);
+    mLastFlush.resize(nElements);
+
+    if (ccsCondition != CcdIGNOREPE) {
+      CcdCallOnConditionKeep(
+        ccsCondition,
+        reinterpret_cast<CcdVoidFn>(&_on_condition<Ts...>),
+        this);
+    }
   }
 
   inline bool timed_out(const int& pe) {
-    auto found = mLastFlush.find(pe);
-    if (found == mLastFlush.end()) {
-      mLastFlush[pe] = CkWallTimer();
+    auto& last = mLastFlush[pe];
+    if (last == 0.0) {
+      last = CkWallTimer();
       return false;
     } else {
-      return (CkWallTimer() - found->second) >= mFlushTimeout;
+      return (CkWallTimer() - last) >= mFlushTimeout;
     }
   }
 
@@ -101,20 +125,24 @@ struct aggregator {
     envelope* env = UsrToEnv(msg);
     env->setSrcPe(CkMyPe());
     CmiSetHandler(env, _bundleIdx);
-    CmiSyncSendAndFree(pe, env->getTotalsize(), (char*)env);
+    if (mNodeLevel) {
+      CmiSyncNodeSendAndFree(pe, env->getTotalsize(), (char*)env);
+    } else {
+      CmiSyncSendAndFree(pe, env->getTotalsize(), (char*)env);
+    }
 
     mLastFlush[pe] = CkWallTimer();
     queue.clear();
   }
 
-  void on_idle(void) {
-    for (const auto& pair : mQueues) {
-      if (!pair.second.empty() && timed_out(pair.first)) {
-        flush(pair.first);
+  void on_cond(void) {
+    for (auto pe = 0; pe < nElements; pe++) {
+      if (mNodeLevel) mQueueLocks[pe].lock();
+      if (!mQueues[pe].empty() && timed_out(pe)) {
+        flush(pe);
       }
+      if (mNodeLevel) mQueueLocks[pe].unlock();
     }
-
-    set_cond();
   }
 
   void send(const int& pe, const Ts&... const_ts) {
@@ -127,29 +155,27 @@ struct aggregator {
 
   void send(const int& pe, CkMessage* msg) {
     QdCreate(1);
+    if (mNodeLevel) mQueueLocks[pe].lock();
     put_msg(pe, msg);
     if (should_flush(pe)) {
       flush(pe);
     }
+    if (mNodeLevel) mQueueLocks[pe].unlock();
   }
 
  private:
+  bool mNodeLevel;
   int mMsgThreshold;
+  int nElements;
   double mFlushTimeout;
   endpoint_id_t mEndpoint;
 
-  std::map<int, double> mLastFlush;
-  std::map<int, msg_queue_t> mQueues;
+  std::vector<double> mLastFlush;
+  std::vector<msg_queue_t> mQueues;
+  std::deque<std::mutex> mQueueLocks;
 
   inline void put_msg(const int& pe, CkMessage* msg) {
     mQueues[pe].emplace_back(msg);
-  }
-
-  inline void set_cond(void) {
-    // Could alternatively use a periodic timer
-    CcdCallOnCondition(CcdPROCESSOR_STILL_IDLE,
-                       reinterpret_cast<CcdVoidFn>(&_when_idle<Ts...>),
-                       this);
   }
 };
 }
