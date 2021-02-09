@@ -1,0 +1,19 @@
+mainmodule hello {
+    mainchare Main {
+        entry [nokeep] Main(CkArgMsg*);
+    };
+
+    template<typename Value>
+    group Transceivers {
+        entry Transceivers(int);
+        entry void receive_value(const Value&);
+        entry void send_values(void);
+        entry void check_count(void);
+    }
+
+    group Transceivers<double>;
+
+    namespace aggregation {
+        initproc void initialize(void);
+    }
+}
