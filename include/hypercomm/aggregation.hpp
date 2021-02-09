@@ -17,7 +17,8 @@ template <typename... Ts>
 struct aggregator;
 
 namespace {
-int _bundleIdx;
+CkpvDeclare(int, _bundleMsg);
+CkpvDeclare(int, _bundleIdx);
 CkpvDeclare(endpoint_registry_t, endpoint_registry_);
 
 void _bundle_handler(void* msg) {
@@ -49,8 +50,10 @@ static void _on_condition(void* self) {
 
 void initialize(void) {
   CkpvInitialize(endpoint_registry_t, endpoint_registry_);
-  _bundleIdx = CmiRegisterHandler((CmiHandler)_bundle_handler);
-  CkPrintf("[%d] registered bundle idx to %d.\n", CkMyPe(), _bundleIdx);
+  CkpvInitialize(int, _bundleMsg);
+  CkpvAccess(_bundleMsg) = CkRegisterMsg("hypercomm_bundle",0,0,0,0);
+  CkpvInitialize(int, _bundleIdx);
+  CkpvAccess(_bundleIdx) = CmiRegisterHandler((CmiHandler)_bundle_handler);
 }
 
 endpoint_id_t register_endpoint_fn(const endpoint_fn_t& fn, bool nodeLevel) {
@@ -125,15 +128,13 @@ struct aggregator {
 
     PUP::sizer ps;
     auto size = pupFn(ps);
-	  envelope *env = _allocEnv(0, size);
+    envelope *env = _allocEnv(CkpvAccess(_bundleMsg), size);
     PUP::toMem p((char *)EnvToUsr(env));
     if (pupFn(p) != size) {
       CkAbort("pup failure");
     }
 
-    CkPrintf("[%d] sent %d bytes with to endpoint %d\n", CkMyPe(), env->getTotalsize(), idx);
-
-    CmiSetHandler(env, _bundleIdx);
+    CmiSetHandler(env, CkpvAccess(_bundleIdx));
     if (mNodeLevel) {
       if (pe != CmiMyNode()) {
         CmiSyncNodeSendAndFree(pe, env->getTotalsize(), env);
