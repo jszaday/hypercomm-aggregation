@@ -10,7 +10,7 @@ mainmodule hello {
     group Transceivers {
 #endif
         entry Transceivers(int);
-        entry void receive_value(const Value&);
+        entry [inline] void receive_value(const Value&);
         entry void send_values(void);
         entry void check_count(void);
     }

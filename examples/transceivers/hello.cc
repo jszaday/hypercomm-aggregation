@@ -16,14 +16,16 @@ class Transceivers : public CBase_Transceivers<T> {
   using aggregator_t = aggregation::aggregator<T>;
   std::unique_ptr<aggregator_t> aggregator;
 
-  int nIters, nRecvd, nElements;
+  int nIters, nElements;
+  std::atomic<int> nRecvd;
 
  public:
   Transceivers(int _nIters) : nIters(_nIters), nRecvd(0) {
+    CkCallback endCb(CkIndex_Transceivers<T>::receive_value(0),
+                     this->thisProxy[this->thisIndex]);
     aggregator = std::unique_ptr<aggregator_t>(
-        new aggregator_t(nIters / 4, 0.1, [this](void* msg) {
-          CkFreeMsg(msg);
-          this->receive_value(0.0);
+        new aggregator_t(nIters / 4, 0.1, [endCb](void* msg) {
+          endCb.send(msg);
         }, kNodeLevel));
     if (kNodeLevel) {
       nElements = CkNumNodes();
@@ -37,12 +39,12 @@ class Transceivers : public CBase_Transceivers<T> {
     if (nRecvd >= nExpected) {
       this->contribute(CkCallback(CkCallback::ckExit));
     } else {
-      CkAbort("%d did not receive all expected messages (%d vs. %d)!\n", this->thisIndex, nRecvd, nExpected);
+      CkAbort("%d did not receive all expected messages (%d vs. %d)!\n", this->thisIndex, (int)nRecvd, nExpected);
     }
   }
 
   void receive_value(const T& f) {
-    nRecvd += 1;
+    nRecvd++;
   }
 
   void send_values(void) {

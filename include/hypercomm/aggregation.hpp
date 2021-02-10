@@ -17,7 +17,6 @@ template <typename... Ts>
 struct aggregator;
 
 namespace {
-CkpvDeclare(int, _bundleMsg);
 CkpvDeclare(int, _bundleIdx);
 CkpvDeclare(endpoint_registry_t, endpoint_registry_);
 
@@ -39,9 +38,9 @@ void _bundle_handler(void* msg) {
   for (auto i = 0; i < nMsgs; i++) {
     CkMarshalledMessage m;
     p | m;
-    QdProcess(1);
     fn(m.getMessage());
   }
+  QdProcess(nMsgs);
   CmiFree(env);
 }
 
@@ -53,8 +52,6 @@ static void _on_condition(void* self) {
 
 void initialize(void) {
   CkpvInitialize(endpoint_registry_t, endpoint_registry_);
-  CkpvInitialize(int, _bundleMsg);
-  CkpvAccess(_bundleMsg) = CkRegisterMsg("hypercomm_bundle", 0, 0, 0, 0);
   CkpvInitialize(int, _bundleIdx);
   CkpvAccess(_bundleIdx) = CmiRegisterHandler((CmiHandler)_bundle_handler);
 }
@@ -129,7 +126,7 @@ struct aggregator {
 
     PUP::sizer ps;
     auto size = pupFn(ps);
-    envelope* env = _allocEnv(CkpvAccess(_bundleMsg), size);
+    envelope* env = _allocEnv(CkEnvelopeType::ForBocMsg, size);
     PUP::toMem p((char*)EnvToUsr(env));
     if (pupFn(p) != size) {
       CkAbort("pup failure");
