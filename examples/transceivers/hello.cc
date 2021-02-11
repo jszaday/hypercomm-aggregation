@@ -16,9 +16,17 @@ constexpr bool kDirectBuffer = true;
 constexpr bool kDirectBuffer = false;
 #endif
 
-template<typename T>
+#ifdef INLINE_SEND
+constexpr bool kCopy2Msg = false;
+#else
+constexpr bool kCopy2Msg = true;
+#endif
+
+template <typename T>
 class Transceivers : public CBase_Transceivers<T> {
-  using buffer_t = typename std::conditional<kDirectBuffer, aggregation::direct_buffer, aggregation::dynamic_buffer>::type;
+  using buffer_t =
+      typename std::conditional<kDirectBuffer, aggregation::direct_buffer,
+                                aggregation::dynamic_buffer>::type;
   using aggregator_t = aggregation::aggregator<buffer_t, T>;
   std::unique_ptr<aggregator_t> aggregator;
 
@@ -28,9 +36,13 @@ class Transceivers : public CBase_Transceivers<T> {
  public:
   Transceivers(int _nIters) : nIters(_nIters), nRecvd(0) {
     auto flushPeriod = nIters / 4;
-    auto bufArg = kDirectBuffer ? flushPeriod * (sizeof(double) + sizeof(aggregation::msg_size_t)) + 3 * sizeof(aggregation::msg_size_t)
-                                : flushPeriod;
+    auto bufArg =
+        kDirectBuffer
+            ? flushPeriod * (sizeof(double) + sizeof(aggregation::msg_size_t)) +
+                  3 * sizeof(aggregation::msg_size_t)
+            : flushPeriod;
     auto cutoff = kDirectBuffer ? 0.75 : 1.0;
+
     if (this->thisIndex == 0) {
       if (kDirectBuffer) {
         CkPrintf("[INFO] Using buffers of size %.3f KB.\n", bufArg / 1024.0);
@@ -38,12 +50,25 @@ class Transceivers : public CBase_Transceivers<T> {
         CkPrintf("[INFO] Setting max messages to %zu.\n", bufArg);
       }
     }
-    CkCallback endCb(CkIndex_Transceivers<T>::receive_value(0),
-                     this->thisProxy[this->thisIndex]);
+
+    aggregation::endpoint_fn_t fn;
+    if (kCopy2Msg) {
+      // Copy from the receive buffer, and send to a callback
+      CkCallback endCb(CkIndex_Transceivers<T>::receive_value(T{}),
+                       this->thisProxy[this->thisIndex]);
+      fn = aggregation::copy2msg([endCb](void* msg) { endCb.send(msg); });
+    } else {
+      // PUP directly from the receive buffer
+      fn = [this](const aggregation::msg_size_t& size, char* data) {
+        PUP::detail::TemporaryObjectHolder<T> t;
+        PUP::fromMemBuf(t, data, size);
+        // call with [inline] semantics
+        this->receive_value(t.t);
+      };
+    }
+
     aggregator = std::unique_ptr<aggregator_t>(
-        new aggregator_t(nIters / 4, cutoff, 1.0, aggregation::copy2msg([endCb](void* msg) {
-          endCb.send(msg);
-        }), kNodeLevel));
+        new aggregator_t(nIters / 4, cutoff, 1.0, fn, kNodeLevel));
     if (kNodeLevel) {
       nElements = CkNumNodes();
     } else {
@@ -56,13 +81,12 @@ class Transceivers : public CBase_Transceivers<T> {
     if (nRecvd >= nExpected) {
       this->contribute(CkCallback(CkCallback::ckExit));
     } else {
-      CkAbort("%d did not receive all expected messages (%d vs. %d)!\n", this->thisIndex, (int)nRecvd, nExpected);
+      CkAbort("%d did not receive all expected messages (%d vs. %d)!\n",
+              this->thisIndex, (int)nRecvd, nExpected);
     }
   }
 
-  void receive_value(const T& f) {
-    nRecvd++;
-  }
+  void receive_value(const T& f) { nRecvd++; }
 
   void send_values(void) {
     for (auto i = 0; i < nIters; i++) {
