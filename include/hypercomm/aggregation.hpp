@@ -98,7 +98,7 @@ struct aggregator {
     CmiSetHandler(env, CkpvAccess(_bundleIdx));
     if (mNodeLevel) {
       if (pe != CmiMyNode()) {
-        CmiSyncNodeSendAndFree(pe, env->getTotalsize(), env);
+        CmiSyncNodeSendAndFree(pe, env->getTotalsize(), reinterpret_cast<char*>(env));
       } else {
         CsdNodeEnqueue(env);
       }
