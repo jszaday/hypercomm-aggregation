@@ -1,19 +1,25 @@
 #include "hello.decl.h"
 
-#include <memory>
-#include <vector>
-
 #include <hypercomm/aggregation.hpp>
+#include <hypercomm/registration.hpp>
+#include <type_traits>
 
 #ifdef NODE_LEVEL
-bool kNodeLevel = true;
+constexpr bool kNodeLevel = true;
 #else
-bool kNodeLevel = false;
+constexpr bool kNodeLevel = false;
+#endif
+
+#ifdef DIRECT_BUFFER
+constexpr bool kDirectBuffer = true;
+#else
+constexpr bool kDirectBuffer = false;
 #endif
 
 template<typename T>
 class Transceivers : public CBase_Transceivers<T> {
-  using aggregator_t = aggregation::aggregator<T>;
+  using buffer_t = typename std::conditional<kDirectBuffer, aggregation::direct_buffer, aggregation::dynamic_buffer>::type;
+  using aggregator_t = aggregation::aggregator<buffer_t, T>;
   std::unique_ptr<aggregator_t> aggregator;
 
   int nIters, nElements;
@@ -21,12 +27,23 @@ class Transceivers : public CBase_Transceivers<T> {
 
  public:
   Transceivers(int _nIters) : nIters(_nIters), nRecvd(0) {
+    auto flushPeriod = nIters / 4;
+    auto bufArg = kDirectBuffer ? flushPeriod * (sizeof(double) + sizeof(aggregation::msg_size_t)) + 3 * sizeof(aggregation::msg_size_t)
+                                : flushPeriod;
+    auto cutoff = kDirectBuffer ? 0.75 : 1.0;
+    if (this->thisIndex == 0) {
+      if (kDirectBuffer) {
+        CkPrintf("[INFO] Using buffers of size %.3f KB.\n", bufArg / 1024.0);
+      } else {
+        CkPrintf("[INFO] Setting max messages to %zu.\n", bufArg);
+      }
+    }
     CkCallback endCb(CkIndex_Transceivers<T>::receive_value(0),
                      this->thisProxy[this->thisIndex]);
     aggregator = std::unique_ptr<aggregator_t>(
-        new aggregator_t(nIters / 4, 0.1, [endCb](void* msg) {
+        new aggregator_t(nIters / 4, cutoff, 1.0, aggregation::copy2msg([endCb](void* msg) {
           endCb.send(msg);
-        }, kNodeLevel));
+        }), kNodeLevel));
     if (kNodeLevel) {
       nElements = CkNumNodes();
     } else {

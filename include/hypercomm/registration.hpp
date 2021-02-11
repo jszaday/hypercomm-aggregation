@@ -21,15 +21,18 @@ void _bundle_handler(void* msg) {
   const auto& reg = nodeLevel ? CkpvAccessOther(endpoint_registry_, 0)
                               : CkpvAccess(endpoint_registry_);
   if (static_cast<std::size_t>(idx) >= reg.size()) {
-    CkAbort(
-        "Invalid endpoint id, %d. [nodeLevel=%d, node=%d, pe=%d, size=%d]\n",
-        idx, nodeLevel, CkMyNode(), CkMyPe(), env->getTotalsize());
+    CkAbort("invalid endpoint id");
   }
   const auto& fn = reg[idx];
   for (auto i = 0; i < nMsgs; i++) {
-    CkMarshalledMessage m;
-    p | m;
-    fn(m.getMessage());
+    msg_size_t size;
+    p | size;
+    if ((p.size() + size) > env->getUsersize()) {
+      CkAbort("exceeded message bounds");
+    } else {
+      fn(size, p.get_current_pointer());
+      p.advance(static_cast<std::size_t>(size));
+    }
   }
   QdProcess(nMsgs);
   CmiFree(env);
