@@ -4,7 +4,7 @@ void EmergencyExit(void) { return; }
 
 void test_2d_mesh(aggregation::routing::mesh<2>& m) {
   const auto& shape = m.shape();
-  CkPrintf("topology of mesh with shape (%zu, %zu):\n", shape[0], shape[1]);
+  CkPrintf("topology of mesh with shape (%zu, %zu) and %zu elements:\n", shape[0], shape[1], m.num_elements());
   for (auto i = 0; i < m.num_nodes(); i += 1) {
     auto coord = m.coordinate_for(i);
     CkPrintf("\t(%zu, %zu)", coord[0], coord[1]);

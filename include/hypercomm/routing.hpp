@@ -53,6 +53,8 @@ class mesh {
 
   inline const std::size_t& num_nodes() const { return nNodes; }
 
+  inline const std::size_t& num_elements() const { return nElements; }
+
   inline std::size_t ordinal_for(const coordinate_t& coord) const {
     std::size_t ord = 0;
     for (auto i = 0; i < (ND - 1); i += 1) {
