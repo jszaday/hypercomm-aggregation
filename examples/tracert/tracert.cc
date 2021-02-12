@@ -1,6 +1,7 @@
-#include <hypercomm/routing.hpp>
+#include "tracert.decl.h"
 
-void EmergencyExit(void) { return; }
+#include <charm++.h>
+#include <hypercomm/routing.hpp>
 
 void test_2d_mesh(aggregation::routing::mesh<2>& m) {
   const auto& shape = m.shape();
@@ -25,14 +26,18 @@ void test_2d_mesh(aggregation::routing::mesh<2>& m) {
            cnxt[1]);
 }
 
-int main(void) {
-  aggregation::routing::mesh<2> m(36);
-  test_2d_mesh(m);
+struct Main: CBase_Main {
+  Main(CkArgMsg*) {
+    aggregation::routing::mesh<2> m(36);
+    test_2d_mesh(m);
 
-  CkPrintf("\n");
+    CkPrintf("\n");
 
-  aggregation::routing::mesh<2> n(27);
-  test_2d_mesh(n);
+    aggregation::routing::mesh<2> n(27);
+    test_2d_mesh(n);
 
-  return 0;
-}
+    CkExit();
+  }
+};
+
+#include "tracert.def.h"

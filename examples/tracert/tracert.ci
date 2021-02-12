@@ -1,0 +1,5 @@
+mainmodule tracert {
+    mainchare Main {
+        entry Main(CkArgMsg*);
+    };
+}
