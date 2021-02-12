@@ -8,6 +8,8 @@ namespace aggregation {
 CkpvDeclare(int, _bundleIdx);
 
 namespace {
+using aggregator_t = detail::aggregator_base_*;
+using endpoint_registry_t = std::vector<std::pair<aggregator_t, endpoint_fn_t>>;
 
 CkpvDeclare(endpoint_registry_t, endpoint_registry_);
 
@@ -18,21 +20,27 @@ void _bundle_handler(void* msg) {
   p | nodeLevel;
   p | idx;
   p | nMsgs;
+  const auto mine = nodeLevel ? CkMyNode() : CkMyPe();
   const auto& reg = nodeLevel ? CkpvAccessOther(endpoint_registry_, 0)
                               : CkpvAccess(endpoint_registry_);
   if (static_cast<std::size_t>(idx) >= reg.size()) {
-    CkAbort("invalid endpoint id");
+    CkAbort("invalid endpoint id on rank %d of %d", CkRankOf(mine), CkMyNode());
   }
-  const auto& fn = reg[idx];
+  const auto& self = reg[idx].first;
+  const auto& fn = reg[idx].second;
   for (auto i = 0; i < nMsgs; i++) {
-    msg_size_t size;
-    p | size;
+    detail::header_ hdr;
+    p | hdr;
+    const auto& dest = hdr.dest;
+    const auto& size = hdr.size;
     if ((p.size() + size) > env->getUsersize()) {
       CkAbort("exceeded message bounds");
-    } else {
+    } else if (dest == mine) {
       fn(size, p.get_current_pointer());
-      p.advance(static_cast<std::size_t>(size));
+    } else {
+      self->send(dest, size, p.get_current_pointer());
     }
+    p.advance(static_cast<std::size_t>(size));
   }
   QdProcess(nMsgs);
   CmiFree(env);
@@ -45,10 +53,11 @@ void initialize(void) {
   CkpvAccess(_bundleIdx) = CmiRegisterHandler((CmiHandler)_bundle_handler);
 }
 
-endpoint_id_t register_endpoint_fn(const endpoint_fn_t& fn, bool nodeLevel) {
+endpoint_id_t register_endpoint_fn(aggregator_t self, const endpoint_fn_t& fn,
+                                   bool nodeLevel) {
   auto& reg = nodeLevel ? CkpvAccessOther(endpoint_registry_, 0)
                         : CkpvAccess(endpoint_registry_);
-  reg.push_back(fn);
+  reg.emplace_back(self, fn);
   return reg.size() - 1;
 }
 }

@@ -11,7 +11,7 @@
 namespace aggregation {
 namespace routing {
 
-class direct {
+struct direct {
   direct(const std::size_t _) {}
   std::size_t next(const std::size_t& _, const std::size_t& to) const {
     return to;

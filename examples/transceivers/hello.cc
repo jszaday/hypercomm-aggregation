@@ -1,5 +1,6 @@
 #include "hello.decl.h"
 
+#include <hypercomm/routing.hpp>
 #include <hypercomm/aggregation.hpp>
 #include <hypercomm/registration.hpp>
 #include <type_traits>
@@ -22,12 +23,20 @@ constexpr bool kCopy2Msg = false;
 constexpr bool kCopy2Msg = true;
 #endif
 
+#ifdef DIRECT_ROUTE
+constexpr bool kDirectRoute = true;
+using router_t = aggregation::routing::direct;
+#else
+constexpr bool kDirectRoute = false;
+using router_t = aggregation::routing::mesh<2>;
+#endif
+
 template <typename T>
 class Transceivers : public CBase_Transceivers<T> {
   using buffer_t =
       typename std::conditional<kDirectBuffer, aggregation::direct_buffer,
                                 aggregation::dynamic_buffer>::type;
-  using aggregator_t = aggregation::aggregator<buffer_t, T>;
+  using aggregator_t = aggregation::aggregator<buffer_t, router_t, T>;
   std::unique_ptr<aggregator_t> aggregator;
 
   int nIters, nElements;
@@ -51,6 +60,9 @@ class Transceivers : public CBase_Transceivers<T> {
       }
     }
 
+    // a periodic condition is typically necessary for non-direct routing
+    auto cond = kDirectRoute ? CcdIGNOREPE : CcdPERIODIC_100ms;
+
     aggregation::endpoint_fn_t fn;
     if (kCopy2Msg) {
       // Copy from the receive buffer, and send to a callback
@@ -68,12 +80,15 @@ class Transceivers : public CBase_Transceivers<T> {
     }
 
     aggregator = std::unique_ptr<aggregator_t>(
-        new aggregator_t(nIters / 4, cutoff, 1.0, fn, kNodeLevel));
+        new aggregator_t(nIters / 4, cutoff, 1.0, fn, kNodeLevel, cond));
     if (kNodeLevel) {
       nElements = CkNumNodes();
     } else {
       nElements = CkNumPes();
     }
+
+    this->contribute(
+      CkCallback(CkIndex_Transceivers<T>::send_values(), this->thisProxy));
   }
 
   void check_count(void) {
@@ -102,7 +117,6 @@ class Main : public CBase_Main {
   Main(CkArgMsg* msg) {
     int nIters = 2048;
     CProxy_Transceivers<double> ts = CProxy_Transceivers<double>::ckNew(nIters);
-    ts.send_values();
     CkStartQD(CkCallback(CkIndex_Transceivers<double>::check_count(), ts));
   }
 };

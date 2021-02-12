@@ -10,11 +10,29 @@
 #include <functional>
 
 namespace aggregation {
+
+using msg_size_t = std::uint32_t;
+
+namespace detail {
+struct header_ {
+  int dest;
+  std::uint32_t size;
+};
+
+struct aggregator_base_ {
+  virtual void send(const int& pe, const msg_size_t& size, char* data) = 0;
+  virtual void on_cond(void) = 0;
+};
+}
+}
+
+PUPbytes(aggregation::detail::header_);
+
+namespace aggregation {
+
 using endpoint_id_t = std::size_t;
-using msg_size_t = int;
 using msg_queue_t = std::deque<std::pair<msg_size_t, std::shared_ptr<char>>>;
 using endpoint_fn_t = std::function<void(const msg_size_t&, char*)>;
-using endpoint_registry_t = std::vector<endpoint_fn_t>;
 
 CkpvExtern(int, _bundleIdx);
 
@@ -27,24 +45,18 @@ endpoint_fn_t copy2msg(const Fn& fn) {
   };
 }
 
-extern endpoint_id_t register_endpoint_fn(const endpoint_fn_t& fn,
+extern endpoint_id_t register_endpoint_fn(detail::aggregator_base_* self,
+                                          const endpoint_fn_t& fn,
                                           bool nodeLevel);
 
 class direct_buffer;
 class dynamic_buffer;
 
-template <typename Buffer, typename... Ts>
+template <typename Buffer, typename Router, typename... Ts>
 struct aggregator;
 
-namespace {
-template <typename... Ts>
-static void _on_condition(void* self) {
-  static_cast<aggregator<Ts...>*>(self)->on_cond();
-}
-}
-
-template <typename Buffer, typename... Ts>
-struct aggregator {
+template <typename Buffer, typename Router, typename... Ts>
+struct aggregator : public detail::aggregator_base_ {
   using buffer_arg_t = typename Buffer::arg_t;
   // example conditions may be:
   //   CcdPERIODIC_10ms or CcdPROCESSOR_STILL_IDLE
@@ -56,8 +68,9 @@ struct aggregator {
         nElements(mNodeLevel ? CkNumNodes() : CkNumPes()),
         mUtilizationCap(utilizationCap),
         mFlushTimeout(flushTimeout),
-        mBuffer(arg, 3 * sizeof(int), nElements) {
-    mEndpoint = register_endpoint_fn(endpoint, nodeLevel);
+        mBuffer(arg, 3 * sizeof(int), nElements),
+        mRouter(nElements) {
+    mEndpoint = register_endpoint_fn(this, endpoint, nodeLevel);
 
     mCounts.resize(nElements);
     if (mNodeLevel) mQueueLocks.resize(nElements);
@@ -65,7 +78,7 @@ struct aggregator {
     if (ccsCondition != CcdIGNOREPE) {
       CcdCallOnConditionKeep(
           ccsCondition,
-          reinterpret_cast<CcdVoidFn>(&_on_condition<Buffer, Ts...>), this);
+          reinterpret_cast<CcdVoidFn>(&_on_condition), this);
     }
   }
 
@@ -97,7 +110,8 @@ struct aggregator {
     CmiSetHandler(env, CkpvAccess(_bundleIdx));
     if (mNodeLevel) {
       if (pe != CmiMyNode()) {
-        CmiSyncNodeSendAndFree(pe, env->getTotalsize(), reinterpret_cast<char*>(env));
+        CmiSyncNodeSendAndFree(pe, env->getTotalsize(),
+                               reinterpret_cast<char*>(env));
       } else {
         CsdNodeEnqueue(env);
       }
@@ -109,7 +123,8 @@ struct aggregator {
     mCounts[pe].store(0);
   }
 
-  void on_cond(void) {
+  virtual void on_cond(void) override {
+    CkAssert(!mNodeLevel || !mQueueLocks.empty());
     for (auto pe = 0; pe < nElements; pe++) {
       if (mNodeLevel) mQueueLocks[pe].lock();
       if (mCounts[pe] != 0 && timed_out(pe)) {
@@ -119,33 +134,51 @@ struct aggregator {
     }
   }
 
-  void send(const int& pe, const Ts&... const_ts) {
-    auto args = std::forward_as_tuple(const_cast<Ts&>(const_ts)...);
-    auto size = static_cast<msg_size_t>(PUP::size(args));
-    auto tsize = sizeof(size) + size;
+  template <typename Fn>
+  inline void send(const int& pe, const msg_size_t& size, const Fn& pupFn) {
+    auto mine = mNodeLevel ? CkMyNode() : CkMyPe();
+    // query the router about where we should send the value
+    auto next = mRouter.next(mine, pe);
+    // route it directly to our send queue if it would go to us
+    if (next == mine) next = pe;
+    CkAssert(next < nElements && "invalid destination");
+    auto header = detail::header_{.dest = pe, .size = size};
+    auto tsize = sizeof(header) + size;
     QdCreate(1);
-    if (mNodeLevel) mQueueLocks[pe].lock();
-    auto buff = mBuffer.get_buffer(pe, tsize);
+    if (mNodeLevel) mQueueLocks[next].lock();
+    auto buff = mBuffer.get_buffer(next, tsize);
     if (buff == nullptr) {
       // assume a capacity failure, and flush
-      flush(pe);
+      flush(next);
       // then retry
-      buff = mBuffer.get_buffer(pe, tsize);
+      buff = mBuffer.get_buffer(next, tsize);
       // abort if we fail again
       if (buff == nullptr) {
         CkAbort("failed to acquire allocation after flush");
       }
     }
     // count the message once we get an allocation
-    mCounts[pe]++;
+    mCounts[next]++;
     PUP::toMem p(buff);
-    p | size;
-    p | args;
+    p | header;
+    pupFn(p);
     if (p.size() != tsize) {
       CkAbort("pup failure");
     }
-    if (should_flush(pe)) flush(pe);
-    if (mNodeLevel) mQueueLocks[pe].unlock();
+    if (should_flush(next)) flush(next);
+    if (mNodeLevel) mQueueLocks[next].unlock();
+  }
+
+  virtual void send(const int& pe, const msg_size_t& size,
+                    char* data) override {
+    send(pe, size,
+         [&](PUP::er& p) { p(data, static_cast<std::size_t>(size)); });
+  }
+
+  void send(const int& pe, const Ts&... const_ts) {
+    auto args = std::forward_as_tuple(const_cast<Ts&>(const_ts)...);
+    auto size = static_cast<msg_size_t>(PUP::size(args));
+    send(pe, size, [&](PUP::er& p) { p | args; });
   }
 
  private:
@@ -156,9 +189,14 @@ struct aggregator {
   endpoint_id_t mEndpoint;
 
   Buffer mBuffer;
+  Router mRouter;
   std::deque<std::atomic<int>> mCounts;
   std::deque<double> mLastFlush;
   std::deque<std::mutex> mQueueLocks;
+
+  static void _on_condition(void* self) {
+    static_cast<detail::aggregator_base_*>(self)->on_cond();
+  }
 };
 
 class direct_buffer {
