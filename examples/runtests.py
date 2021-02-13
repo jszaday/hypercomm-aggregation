@@ -61,7 +61,7 @@ def run_tests(name, timeout=10, num_retries=4):
 def build_and_run(cwd, name, opts):
     os.chdir(cwd)
     os.environ["OPTS"] = " ".join(opts)
-    if not (os.system("make clean") or os.system("make")):
+    if (not os.system("make clean")) and (not os.system("make")):
         return run_tests(name)
     else:
         return [("make",)]
