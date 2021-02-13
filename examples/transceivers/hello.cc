@@ -47,10 +47,9 @@ class Transceivers : public CBase_Transceivers<T> {
     auto flushPeriod = nIters / 4;
     auto bufArg =
         kDirectBuffer
-            ? flushPeriod * (sizeof(double) + sizeof(aggregation::msg_size_t)) +
-                  3 * sizeof(aggregation::msg_size_t)
+            ? flushPeriod * sizeof(double) * sizeof(aggregation::detail::header_)
             : flushPeriod;
-    auto cutoff = kDirectBuffer ? 0.75 : 1.0;
+    auto cutoff = kDirectBuffer ? 0.5 : 1.0;
 
     if (this->thisIndex == 0) {
       if (kDirectBuffer) {
@@ -61,7 +60,7 @@ class Transceivers : public CBase_Transceivers<T> {
     }
 
     // a periodic condition is typically necessary for non-direct routing
-    auto cond = kDirectRoute ? CcdIGNOREPE : CcdPERIODIC_100ms;
+    auto cond = CcdPERIODIC_10ms;
 
     aggregation::endpoint_fn_t fn;
     if (kCopy2Msg) {
