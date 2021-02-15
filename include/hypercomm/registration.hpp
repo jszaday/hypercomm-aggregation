@@ -2,6 +2,7 @@
 #define __HYPERCOMM_REGISTRATION_HPP__
 
 #include <hypercomm/aggregation.hpp>
+#include <hypercomm/analytics.hpp>
 
 namespace aggregation {
 
@@ -33,6 +34,9 @@ void _bundle_handler(void* msg) {
     p | hdr;
     const auto& dest = hdr.dest;
     const auto& size = hdr.size;
+#ifdef HYPERCOMM_TRACING_ON
+    analytics::tally_message(idx, size);
+#endif
     if ((p.size() + size) > env->getUsersize()) {
       CkAbort("exceeded message bounds");
     } else if (dest == mine) {
@@ -50,7 +54,11 @@ void _bundle_handler(void* msg) {
 void initialize(void) {
   CkpvInitialize(endpoint_registry_t, endpoint_registry_);
   CkpvInitialize(int, _bundleIdx);
-  CkpvAccess(_bundleIdx) = CmiRegisterHandler((CmiHandler)_bundle_handler);
+  CkpvAccess(_bundleIdx) =
+      CmiRegisterHandler(reinterpret_cast<CmiHandler>(_bundle_handler));
+#ifdef HYPERCOMM_TRACING_ON
+  analytics::initialize();
+#endif
 }
 
 endpoint_id_t register_endpoint_fn(aggregator_t self, const endpoint_fn_t& fn,

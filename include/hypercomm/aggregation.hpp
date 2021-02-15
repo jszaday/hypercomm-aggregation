@@ -45,6 +45,9 @@ endpoint_fn_t copy2msg(const Fn& fn) {
   };
 }
 
+namespace analytics {
+extern void tally_flush(const endpoint_id_t& id, const float& utilization);
+}
 extern endpoint_id_t register_endpoint_fn(detail::aggregator_base_* self,
                                           const endpoint_fn_t& fn,
                                           bool nodeLevel);
@@ -100,6 +103,9 @@ struct aggregator : public detail::aggregator_base_ {
     int ndLvl = static_cast<int>(mNodeLevel);
     int idx = static_cast<int>(mEndpoint);
     int nMsgs = mCounts[pe].load();
+#ifdef HYPERCOMM_TRACING_ON
+    analytics::tally_flush(idx, mBuffer.utilization(pe));
+#endif
     auto env = mBuffer.flush(pe);
     PUP::toMem p(EnvToUsr(env));
 
