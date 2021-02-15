@@ -49,7 +49,7 @@ class Transceivers : public CBase_Transceivers<T> {
         kDirectBuffer
             ? flushPeriod * sizeof(double) * sizeof(aggregation::detail::header_)
             : flushPeriod;
-    auto cutoff = kDirectBuffer ? 0.5 : 1.0;
+    auto cutoff = kDirectBuffer ? 0.85 : 1.0;
 
     if (this->thisIndex == 0) {
       if (kDirectBuffer) {
@@ -60,7 +60,7 @@ class Transceivers : public CBase_Transceivers<T> {
     }
 
     // a periodic condition is typically necessary for non-direct routing
-    auto cond = CcdPERIODIC_10ms;
+    auto cond = CcdPROCESSOR_STILL_IDLE;
 
     aggregation::endpoint_fn_t fn;
     if (kCopy2Msg) {
@@ -79,7 +79,7 @@ class Transceivers : public CBase_Transceivers<T> {
     }
 
     aggregator = std::unique_ptr<aggregator_t>(
-        new aggregator_t(nIters / 4, cutoff, 1.0, fn, kNodeLevel, cond));
+        new aggregator_t(bufArg, cutoff, 0.05, fn, kNodeLevel, cond));
     if (kNodeLevel) {
       nElements = CkNumNodes();
     } else {

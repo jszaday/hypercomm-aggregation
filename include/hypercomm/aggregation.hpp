@@ -45,6 +45,9 @@ endpoint_fn_t copy2msg(const Fn& fn) {
   };
 }
 
+namespace analytics {
+extern void tally_flush(const endpoint_id_t& id, const float& utilization);
+}
 extern endpoint_id_t register_endpoint_fn(detail::aggregator_base_* self,
                                           const endpoint_fn_t& fn,
                                           bool nodeLevel);
@@ -100,6 +103,9 @@ struct aggregator : public detail::aggregator_base_ {
     int ndLvl = static_cast<int>(mNodeLevel);
     int idx = static_cast<int>(mEndpoint);
     int nMsgs = mCounts[pe].load();
+#ifdef HYPERCOMM_TRACING_ON
+    analytics::tally_flush(idx, mBuffer.utilization(pe));
+#endif
     auto env = mBuffer.flush(pe);
     PUP::toMem p(EnvToUsr(env));
 
@@ -213,8 +219,8 @@ class direct_buffer {
       : mBufferSize(bufferSize), mHeaderSize(headerSize) {
     for (auto i = 0; i < nPes; i++) {
       auto env = _allocEnv(CkEnvelopeType::ForBocMsg, mBufferSize);
-      auto start = static_cast<char*>(EnvToUsr(env)) + mHeaderSize;
-      mQueues.emplace_back(env, start, start);
+      auto start = static_cast<char*>(EnvToUsr(env));
+      mQueues.emplace_back(env, start, start + mHeaderSize);
     }
   }
 
@@ -236,12 +242,12 @@ class direct_buffer {
 
   envelope* flush(const int& pe) {
     envelope* env = std::get<0>(mQueues[pe]);
-    env->setUsersize(size(pe) + mHeaderSize);
+    env->setUsersize(size(pe));
     std::get<0>(mQueues[pe]) =
         _allocEnv(CkEnvelopeType::ForBocMsg, mBufferSize);
     std::get<1>(mQueues[pe]) =
-        static_cast<char*>(EnvToUsr(std::get<0>(mQueues[pe]))) + mHeaderSize;
-    std::get<2>(mQueues[pe]) = std::get<1>(mQueues[pe]);
+        static_cast<char*>(EnvToUsr(std::get<0>(mQueues[pe])));
+    std::get<2>(mQueues[pe]) = std::get<1>(mQueues[pe]) + mHeaderSize;
     return env;
   }
 
