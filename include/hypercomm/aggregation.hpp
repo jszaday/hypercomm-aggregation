@@ -219,8 +219,8 @@ class direct_buffer {
       : mBufferSize(bufferSize), mHeaderSize(headerSize) {
     for (auto i = 0; i < nPes; i++) {
       auto env = _allocEnv(CkEnvelopeType::ForBocMsg, mBufferSize);
-      auto start = static_cast<char*>(EnvToUsr(env)) + mHeaderSize;
-      mQueues.emplace_back(env, start, start);
+      auto start = static_cast<char*>(EnvToUsr(env));
+      mQueues.emplace_back(env, start, start + mHeaderSize);
     }
   }
 
@@ -242,12 +242,12 @@ class direct_buffer {
 
   envelope* flush(const int& pe) {
     envelope* env = std::get<0>(mQueues[pe]);
-    env->setUsersize(size(pe) + mHeaderSize);
+    env->setUsersize(size(pe));
     std::get<0>(mQueues[pe]) =
         _allocEnv(CkEnvelopeType::ForBocMsg, mBufferSize);
     std::get<1>(mQueues[pe]) =
-        static_cast<char*>(EnvToUsr(std::get<0>(mQueues[pe]))) + mHeaderSize;
-    std::get<2>(mQueues[pe]) = std::get<1>(mQueues[pe]);
+        static_cast<char*>(EnvToUsr(std::get<0>(mQueues[pe])));
+    std::get<2>(mQueues[pe]) = std::get<1>(mQueues[pe]) + mHeaderSize;
     return env;
   }
 
