@@ -56,22 +56,24 @@ envelope* pack_stats_(stats_registry_t& reg) {
   return env;
 }
 
-void unpack_stats_(const envelope* env, stats_registry_t& reg) {
+// TODO evaluate whether using CkAlign here is necessary
+void unpack_stats_(const envelope* env, std::size_t& numStats,
+                   detail::stats_*& stats) {
   PUP::fromMem p(EnvToUsr(env));
-  std::size_t numStats;
   p | numStats;
-  reg.resize(numStats);
-  PUParray(p, reg.data(), numStats);
+  stats = reinterpret_cast<detail::stats_*>(p.get_current_pointer());
 }
 
 void* merge_stats_fn_(int* size, void* local, void** remote, int n) {
-  stats_registry_t ours;
-  unpack_stats_(static_cast<envelope*>(local), ours);
-  for (auto i = 0; i < n; i += 1) {
-    stats_registry_t theirs;
-    unpack_stats_(static_cast<envelope*>(remote[i]), theirs);
-    CkAssert(ours.size() == theirs.size());
-    for (auto j = 0; j < ours.size(); j += 1) {
+  detail::stats_* ours;
+  std::size_t szOurs;
+  unpack_stats_(static_cast<envelope*>(local), szOurs, ours);
+  for (auto i = 0; i < szOurs; i += 1) {
+    detail::stats_* theirs;
+    std::size_t szTheirs;
+    unpack_stats_(static_cast<envelope*>(remote[i]), szTheirs, theirs);
+    CkAssert(szOurs == szTheirs);
+    for (auto j = 0; j < szOurs; j += 1) {
       ours[j].nAggregatedMessages += theirs[j].nAggregatedMessages;
       ours[j].nBytesAggregated += theirs[j].nBytesAggregated;
       ours[j].avgUtilizationAtFlush =
@@ -81,8 +83,7 @@ void* merge_stats_fn_(int* size, void* local, void** remote, int n) {
       ours[j].nFlushes += theirs[j].nFlushes;
     }
   }
-  CmiFree(local);
-  return pack_stats_(ours);
+  return local;
 }
 
 void contribute_stats_(void* _) {
@@ -92,11 +93,12 @@ void contribute_stats_(void* _) {
 }
 
 void recv_stats_(void* msg) {
-  stats_registry_t reg;
-  unpack_stats_(static_cast<envelope*>(msg), reg);
-  std::stringstream ss;
+  detail::stats_* reg;
+  std::size_t szReg;
+  unpack_stats_(static_cast<envelope*>(msg), szReg, reg);
 
-  for (std::size_t i = 0; i < reg.size(); i += 1) {
+  std::stringstream ss;
+  for (std::size_t i = 0; i < szReg; i += 1) {
     const auto& stats = reg[i];
     ss << std::endl << "[INFO] Data for Aggregator " << i << ":" << std::endl;
     ss << "\tnbr of flushes = " << stats.nFlushes << std::endl;
@@ -114,11 +116,13 @@ void recv_stats_(void* msg) {
        << (100.0 * stats.avgUtilizationAtFlush) << "%" << std::endl;
   }
 
-  if (reg.empty()) {
-    CkPrintf("[INFO] No aggregation data available.\n");
-  } else {
-    CkPrintf("%s\n", ss.str().c_str());
+  if (szReg == 0) {
+    ss << "[INFO] No aggregation data available." << std::endl;
   }
+
+  CkPrintf("%s\n", ss.str().c_str());
+
+  CmiFree(msg);
 
   CkContinueExit();
 }
