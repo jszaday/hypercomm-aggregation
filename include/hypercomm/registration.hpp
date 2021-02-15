@@ -2,7 +2,9 @@
 #define __HYPERCOMM_REGISTRATION_HPP__
 
 #include <hypercomm/aggregation.hpp>
+#ifdef HYPERCOMM_TRACING_ON
 #include <hypercomm/analytics.hpp>
+#endif
 
 namespace aggregation {
 

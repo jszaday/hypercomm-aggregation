@@ -1,6 +1,10 @@
-#include <hypercomm/aggregation.hpp>
-#include <sstream>
+#ifndef __HYPERCOMM_ANALYTICS_HPP__
+#define __HYPERCOMM_ANALYTICS_HPP__
+
 #include <mutex>
+#include <sstream>
+
+#include <hypercomm/aggregation.hpp>
 
 namespace aggregation {
 namespace detail {
@@ -94,7 +98,7 @@ void recv_stats_(void* msg) {
 
   for (std::size_t i = 0; i < reg.size(); i += 1) {
     const auto& stats = reg[i];
-    ss << "[INFO] Data for Aggregator " << i << ":" << std::endl;
+    ss << std::endl << "[INFO] Data for Aggregator " << i << ":" << std::endl;
     ss << "\tnbr of flushes = " << stats.nFlushes << std::endl;
     ss << "\tnbr of messages aggregated = " << stats.nAggregatedMessages
        << std::endl;
@@ -108,7 +112,12 @@ void recv_stats_(void* msg) {
        << (100.0 * stats.avgUtilizationAtFlush) << "%" << std::endl;
   }
 
-  CkPrintf("%s\n", ss.str().c_str());
+  if (reg.empty()) {
+    CkPrintf("[INFO] No aggregation data available.\n");
+  } else {
+    CkPrintf("%s\n", ss.str().c_str());
+  }
+
   CkContinueExit();
 }
 
@@ -137,7 +146,7 @@ inline void initialize(void) {
   }
 }
 
-inline void tally_message(const endpoint_id_t& id, const msg_size_t& size) {
+void tally_message(const endpoint_id_t& id, const msg_size_t& size) {
 #if CMK_SMP
   CksvAccess(node_lock_).lock();
 #endif
@@ -149,7 +158,7 @@ inline void tally_message(const endpoint_id_t& id, const msg_size_t& size) {
 #endif
 }
 
-inline void tally_flush(const endpoint_id_t& id, const float& utilization) {
+void tally_flush(const endpoint_id_t& id, const float& utilization) {
 #if CMK_SMP
   CksvAccess(node_lock_).lock();
 #endif
@@ -164,3 +173,5 @@ inline void tally_flush(const endpoint_id_t& id, const float& utilization) {
 }
 }
 }
+
+#endif
