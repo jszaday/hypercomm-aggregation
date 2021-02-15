@@ -56,19 +56,19 @@ envelope* pack_stats_(stats_registry_t& reg) {
   return env;
 }
 
-// TODO evaluate whether using CkAlign here is necessary
+// TODO evaluate whether CkAlign is necessary here
 void unpack_stats_(const envelope* env, std::size_t& numStats,
                    detail::stats_*& stats) {
-  PUP::fromMem p(EnvToUsr(env));
-  p | numStats;
-  stats = reinterpret_cast<detail::stats_*>(p.get_current_pointer());
+  auto buffer = static_cast<char*>(EnvToUsr(env));
+  numStats = *(reinterpret_cast<std::size_t*>(buffer));
+  stats = reinterpret_cast<detail::stats_*>(buffer + sizeof(std::size_t));
 }
 
-void* merge_stats_fn_(int* size, void* local, void** remote, int n) {
+void* merge_stats_fn_(int* size, void* local, void** remote, int szRemote) {
   detail::stats_* ours;
   std::size_t szOurs;
   unpack_stats_(static_cast<envelope*>(local), szOurs, ours);
-  for (auto i = 0; i < szOurs; i += 1) {
+  for (auto i = 0; i < szRemote; i += 1) {
     detail::stats_* theirs;
     std::size_t szTheirs;
     unpack_stats_(static_cast<envelope*>(remote[i]), szTheirs, theirs);
