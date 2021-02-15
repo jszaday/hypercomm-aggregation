@@ -72,11 +72,14 @@ struct aggregator : public detail::aggregator_base_ {
         mUtilizationCap(utilizationCap),
         mFlushTimeout(flushTimeout),
         mBuffer(arg, 3 * sizeof(int), nElements),
-        mRouter(nElements) {
+        mRouter(nElements),
+        mLastFlush(nElements),
+        mQueueLocks(nodeLevel ? nElements : 0) {
     mEndpoint = register_endpoint_fn(this, endpoint, nodeLevel);
 
-    mCounts.resize(nElements);
-    if (mNodeLevel) mQueueLocks.resize(nElements);
+    for (auto i = 0; i < nElements; i += 1) {
+      mCounts.emplace_back(0);
+    }
 
     if (ccsCondition != CcdIGNOREPE) {
       CcdCallOnConditionKeep(

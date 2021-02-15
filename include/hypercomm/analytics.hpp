@@ -102,12 +102,14 @@ void recv_stats_(void* msg) {
     ss << "\tnbr of flushes = " << stats.nFlushes << std::endl;
     ss << "\tnbr of messages aggregated = " << stats.nAggregatedMessages
        << std::endl;
-    ss << "\tnbr of megabytes aggregated = "
+    ss << "\ttotal megabytes aggregated = "
        << stats.nBytesAggregated / (1024.0 * 1024.0) << "MB" << std::endl;
     auto avgAggregatedMessageSize =
         stats.nBytesAggregated / ((double)stats.nAggregatedMessages);
     ss << "\tavg bytes per aggregated message = " << avgAggregatedMessageSize
        << "B" << std::endl;
+    ss << "\tavg messages per flush = "
+       << (stats.nAggregatedMessages / ((double)stats.nFlushes)) << std::endl;
     ss << "\tavg buffer utilization at flush-time = "
        << (100.0 * stats.avgUtilizationAtFlush) << "%" << std::endl;
   }
