@@ -54,10 +54,10 @@ class Transceivers : public CBase_Transceivers<T> {
   Transceivers(int _nIters) : nIters(_nIters), nRecvd(0) {
     std::srand(static_cast<unsigned int>(CkWallTimer()));
 
-    auto flushPeriod = nIters / 4;
+    auto flushPeriod = nIters / 2;
     auto bufArg =
         kDirectBuffer
-            ? flushPeriod * sizeof(double) * sizeof(aggregation::detail::header_)
+            ? flushPeriod * (sizeof(double) + sizeof(aggregation::detail::header_))
             : flushPeriod;
     auto cutoff = kDirectBuffer ? 0.85 : 1.0;
 
@@ -103,7 +103,7 @@ class Transceivers : public CBase_Transceivers<T> {
   void contribute_count(void) {
     this->contribute(sizeof(int), &nRecvd, CkReduction::sum_int, CkCallback(
       CkReductionTarget(Transceivers<T>, check_count),
-      this->thisProxy[this->thisIndex]
+      this->thisProxy[0]
     ));
   }
 
@@ -133,7 +133,7 @@ class Transceivers : public CBase_Transceivers<T> {
 class Main : public CBase_Main {
  public:
   Main(CkArgMsg* msg) {
-    int nIters = 2048;
+    int nIters = 2 * 1024;
     CProxy_Transceivers<double> ts = CProxy_Transceivers<double>::ckNew(nIters);
     CkStartQD(CkCallback(CkIndex_Transceivers<double>::contribute_count(), ts));
   }
