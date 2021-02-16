@@ -87,6 +87,7 @@ void* merge_stats_fn_(int* size, void* local, void** remote, int szRemote) {
 }
 
 void contribute_stats_(void* _) {
+  CkAssert(CkMyRank() == 0 && "CmiNodeReduce must be called on Rank 0.\n");
   auto env = pack_stats_(CksvAccess(stats_registry_));
   CmiNodeReduce(reinterpret_cast<char*>(env), env->getTotalsize(),
                 reinterpret_cast<CmiReduceMergeFn>(&merge_stats_fn_));
@@ -130,8 +131,11 @@ void recv_stats_(void* msg) {
 void exit_handler_(void) {
   auto env = _allocEnv(CkEnvelopeType::ForBocMsg, 0);
   CmiSetHandler(env, CkpvAccess(_cntrStatsIdx));
-  CmiSyncNodeBroadcastAllAndFree(env->getTotalsize(),
-                                 reinterpret_cast<char*>(env));
+  for (auto i = 0; i < CmiNumNodes(); i += 1) {
+    CmiSyncSendFn(CkNodeFirst(i), env->getTotalsize(),
+                  reinterpret_cast<char*>(env));
+  }
+  CmiFree(env);
 }
 }
 
