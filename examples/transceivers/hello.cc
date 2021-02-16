@@ -1,9 +1,11 @@
 #include "hello.decl.h"
 
+#include <cstdlib> 
+#include <type_traits>
+
 #include <hypercomm/routing.hpp>
 #include <hypercomm/aggregation.hpp>
 #include <hypercomm/registration.hpp>
-#include <type_traits>
 
 #ifdef NODE_LEVEL
 constexpr bool kNodeLevel = true;
@@ -31,6 +33,12 @@ constexpr bool kDirectRoute = false;
 using router_t = aggregation::routing::mesh<2>;
 #endif
 
+#ifdef RANDOMIZE_SENDS
+constexpr bool kRandomizeSends = true;
+#else
+constexpr bool kRandomizeSends = false;
+#endif
+
 template <typename T>
 class Transceivers : public CBase_Transceivers<T> {
   using buffer_t =
@@ -44,6 +52,8 @@ class Transceivers : public CBase_Transceivers<T> {
 
  public:
   Transceivers(int _nIters) : nIters(_nIters), nRecvd(0) {
+    std::srand(static_cast<unsigned int>(CkWallTimer()));
+
     auto flushPeriod = nIters / 4;
     auto bufArg =
         kDirectBuffer
@@ -90,10 +100,18 @@ class Transceivers : public CBase_Transceivers<T> {
       CkCallback(CkIndex_Transceivers<T>::send_values(), this->thisProxy));
   }
 
-  void check_count(void) {
-    auto nExpected = nIters * nElements;
-    if (nRecvd >= nExpected) {
-      this->contribute(CkCallback(CkCallback::ckExit));
+  void contribute_count(void) {
+    this->contribute(sizeof(int), &nRecvd, CkReduction::sum_int, CkCallback(
+      CkReductionTarget(Transceivers<T>, check_count),
+      this->thisProxy[this->thisIndex]
+    ));
+  }
+
+  void check_count(int sum) {
+    auto nExpected = nIters * nElements * nElements;
+    if (sum == nExpected) {
+      CkPrintf("[INFO] All values received, done.\n");
+      CkExit();
     } else {
       CkAbort("%d did not receive all expected messages (%d vs. %d)!\n",
               this->thisIndex, (int)nRecvd, nExpected);
@@ -105,7 +123,8 @@ class Transceivers : public CBase_Transceivers<T> {
   void send_values(void) {
     for (auto i = 0; i < nIters; i++) {
       for (auto j = 0; j < nElements; j++) {
-        aggregator->send(j, static_cast<T>((i + 1) * (j + 1)));
+        int dest = kRandomizeSends ? (std::rand() % nElements) : j;
+        aggregator->send(dest, static_cast<T>((i + 1) * (j + 1)));
       }
     }
   }
@@ -116,7 +135,7 @@ class Main : public CBase_Main {
   Main(CkArgMsg* msg) {
     int nIters = 2048;
     CProxy_Transceivers<double> ts = CProxy_Transceivers<double>::ckNew(nIters);
-    CkStartQD(CkCallback(CkIndex_Transceivers<double>::check_count(), ts));
+    CkStartQD(CkCallback(CkIndex_Transceivers<double>::contribute_count(), ts));
   }
 };
 

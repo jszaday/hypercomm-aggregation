@@ -12,7 +12,8 @@ mainmodule hello {
         entry Transceivers(int);
         entry [inline] void receive_value(const Value&);
         entry void send_values(void);
-        entry void check_count(void);
+        entry void contribute_count(void);
+        entry [reductiontarget] void check_count(int);
     }
 
 #ifdef NODE_LEVEL
