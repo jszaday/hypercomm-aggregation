@@ -209,12 +209,13 @@ void exit_handler_(void) {
 namespace analytics {
 
 inline void initialize(void) {
+  if (CkMyRank() == 0) {
 #if CMK_SMP
-  CksvInitialize(node_lock_t, node_lock_);
+    CksvInitialize(node_lock_t, node_lock_);
 #endif
-
-  CksvInitialize(envelope*, sibling_);
-  CksvAccess(sibling_) = nullptr;
+    CksvInitialize(envelope*, sibling_);
+    CksvAccess(sibling_) = nullptr;
+  }
 
   CkpvInitialize(int, _recv_stats_idx);
   CkpvAccess(_recv_stats_idx) =
