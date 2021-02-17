@@ -69,6 +69,7 @@ def build_and_run(cwd, name, opts):
 pwd = os.path.dirname(os.path.realpath(__file__))
 all_opts = [ list(x) for x in powerset([ \
     "-DDIRECT_ROUTE", "-DNODE_LEVEL", "-DDIRECT_BUFFER", "-DINLINE_SEND", "-DRANDOMIZE_SENDS" ]) ]
+all_opts = [ [ "-DHYPERCOMM_TRACING_ON" ] ] + all_opts
 num_tests = len(all_opts) * sum( len(list(get_factors(p))) for p in pes )
 
 all_failures = []
