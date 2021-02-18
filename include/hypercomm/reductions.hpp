@@ -22,6 +22,10 @@ inline int num_children(const int& n, const int& i) {
 
 template <typename T = int>
 struct ispace {
+  ispace() : t(IGNORE) {}
+
+  ispace(const ispace<T>& is) : t(is.t), d(is.d) {}
+
   ispace(T n) : t(RANGE), d{.range_ = {.start = 0, .end = n, .step = 1}} {}
 
   ispace(T start, T end, T step = 1)
@@ -67,6 +71,8 @@ struct ispace {
     }
   }
 
+  explicit operator bool(void) const { return t != IGNORE; }
+
  private:
   enum type_ : T { IGNORE, RANGE, SPARSE };
   union data_ {
@@ -95,39 +101,30 @@ using id_t = int;
 
 namespace {
 using redn_table_t =
-    std::map<redn_id_t,
-             std::tuple<callback_fn, merge_fn, ispace<id_t>, envelope_t, int>>;
+    std::map<redn_id_t, std::tuple<callback_fn, merge_fn, ispace<id_t>,
+                                   std::deque<envelope_t>>>;
 
 CsvDeclare(std::mutex, redn_lock_);
 CsvDeclare(redn_id_t, redn_count_);
 CsvDeclare(redn_table_t, redn_table_);
 CpvDeclare(int, recv_value_idx_);
 
-redn_id_t create_redn_(const callback_fn& cb, const merge_fn& fn,
-                       const ispace<id_t>& is) {
-  CsvAccess(redn_lock_).lock();
-  auto self = CsvAccess(redn_count_)++;
-  (CsvAccess(redn_table_))
-      .emplace(self, std::forward_as_tuple(
-                         cb, fn, is, static_cast<envelope_t>(nullptr), 0));
-  CsvAccess(redn_lock_).unlock();
-  return self;
-}
-
 void recv_values_(void* impl_msg_) {
   auto env = static_cast<envelope_t>(impl_msg_);
   auto redn = CmiGetRedID(env);
 
   CsvAccess(redn_lock_).lock();
-  auto& self = CsvAccess(redn_table_).at(redn);
-  auto& next = std::get<3>(self);
-  next = (std::get<1>(self))(env, next);
-  auto nRecvd = ++(std::get<4>(self));
+  auto& self = (CsvAccess(redn_table_))[redn];
+  const auto is = std::get<2>(self);
+  auto& recvd = std::get<3>(self);
+  recvd.push_back(env);
+  auto nRecvd = recvd.size();
   CsvAccess(redn_lock_).unlock();
 
-  const auto& is = std::get<2>(self);
-  auto n = is.elements();
-  auto i = is.position(CmiMyNode());
+  if (!is) return;
+
+  const auto n = is.elements();
+  const auto i = is.position(CmiMyNode());
 
   const auto parent = detail::binary_tree_::parent(i);
   const auto nExptd = detail::binary_tree_::num_children(n, i) + 1;
@@ -136,7 +133,12 @@ void recv_values_(void* impl_msg_) {
     CmiAssert(nRecvd < nExptd &&
               "should not receive more messages than expected");
     return;
-  } else if (parent >= 0) {
+  }
+
+  auto next = std::accumulate(recvd.begin() + 1, recvd.end(), recvd[0],
+                              std::get<1>(self));
+
+  if (parent >= 0) {
     CmiSetHandler(next, CpvAccess(recv_value_idx_));
     CmiSyncNodeSendAndFree(is.index(parent), next->getTotalsize(),
                            reinterpret_cast<char*>(next));
@@ -148,6 +150,27 @@ void recv_values_(void* impl_msg_) {
   CsvAccess(redn_table_).erase(redn);
   CsvAccess(redn_lock_).unlock();
 }
+}
+
+redn_id_t create_redn_(const callback_fn& cb, const merge_fn& fn,
+                       const ispace<id_t>& is) {
+  CsvAccess(redn_lock_).lock();
+  auto& table = CsvAccess(redn_table_);
+  auto redn = CsvAccess(redn_count_)++;
+  auto search = table.find(redn);
+  if (search != table.end()) {
+    auto& self = search->second;
+    CkAssert(!std::get<2>(self) &&
+             "is should not be set in table before registration");
+    std::get<0>(self) = cb;
+    std::get<1>(self) = fn;
+    std::get<2>(self) = is;
+  } else {
+    table.emplace_hint(search, redn, std::forward_as_tuple(
+                                         cb, fn, is, std::deque<envelope_t>{}));
+  }
+  CsvAccess(redn_lock_).unlock();
+  return redn;
 }
 
 void contribute(envelope* env, const merge_fn& fn,
@@ -165,8 +188,7 @@ void contribute(envelope* env, const merge_fn& fn,
   CsdNodeEnqueue(env);
 }
 
-void contribute(envelope* env,
-                const callback_fn& cb, const merge_fn& fn,
+void contribute(envelope* env, const callback_fn& cb, const merge_fn& fn,
                 const ispace<id_t>& is = {CmiNumNodes()}) {
   // create a reduction for the redn
   auto self = create_redn_(cb, fn, is);
@@ -188,8 +210,6 @@ void initialize(void) {
 }
 }
 
-void initialize(void) {
-  node::initialize();
-}
+void initialize(void) { node::initialize(); }
 }
 }
