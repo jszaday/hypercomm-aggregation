@@ -82,9 +82,8 @@ struct aggregator : public detail::aggregator_base_ {
     }
 
     if (ccsCondition != CcdIGNOREPE) {
-      CcdCallOnConditionKeep(
-          ccsCondition,
-          reinterpret_cast<CcdVoidFn>(&on_condition_), this);
+      CcdCallOnConditionKeep(ccsCondition,
+                             reinterpret_cast<CcdVoidFn>(&on_condition_), this);
     }
   }
 
@@ -203,6 +202,48 @@ struct aggregator : public detail::aggregator_base_ {
 
   static void on_condition_(void* self) {
     static_cast<detail::aggregator_base_*>(self)->on_cond();
+  }
+};
+
+template <typename Buffer, typename Router, typename... Ts>
+struct array_aggregator
+    : private aggregator<Buffer, Router, CkArrayIndex, Ts...> {
+  using buffer_arg_t = typename Buffer::arg_t;
+  using parent_t = aggregator<Buffer, Router, CkArrayIndex, Ts...>;
+
+  array_aggregator(const CkArrayID& id, int entryIndex, const buffer_arg_t& arg,
+                   double utilizationCap, double flushTimeout,
+                   bool nodeLevel = false, int ccsCondition = CcdIGNOREPE)
+      : parent_t(
+            arg, utilizationCap, flushTimeout,
+            make_endpoint_fn_(id, entryIndex), nodeLevel, ccsCondition),
+        mArray(static_cast<CkArray*>(_localBranch(id))) {
+    CkAssert(mArray != nullptr);
+  }
+
+  inline void send(const CkArrayIndex& idx, const Ts&... const_ts) {
+    parent_t::send(mArray->lastKnown(idx), idx, const_ts...);
+  }
+
+  inline void send(const CProxyElement_ArrayElement& element, const Ts&... const_ts) {
+    CkAssert(id == (CkArrayID)element);
+    this->send(element.ckGetIndex(), const_ts...);
+  }
+
+ private:
+  CkArray* mArray;
+
+  static inline endpoint_fn_t make_endpoint_fn_(const CkArrayID& id,
+                                                const int& entryIndex) {
+    return [id, entryIndex] (const msg_size_t& sz, char* begin) {
+      // tuples are currently pup'd in reverse so we start from the end
+      auto end = begin + sz - sizeof(CkArrayIndex);
+      const auto& idx = *(reinterpret_cast<CkArrayIndex*>(end));
+      auto msg = CkAllocateMarshallMsg(sz - sizeof(CkArrayIndex));
+      std::copy(begin, end, msg->msgBuf);
+      CkSetMsgArrayIfNotThere(msg);
+      CkSendMsgArray(entryIndex, msg, id, idx, 0);
+    };
   }
 };
 

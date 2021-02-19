@@ -1,0 +1,20 @@
+mainmodule arrandom {
+    mainchare Main {
+        entry [nokeep] Main(CkArgMsg*);
+    };
+
+    template<typename Value>
+    array [1D] Transceivers {
+        entry Transceivers(int, int);
+        entry [inline] void receive_value(const Value&);
+        entry void send_values(void);
+        entry void contribute_count(void);
+        entry [reductiontarget] void check_count(int);
+    }
+
+    array [1D] Transceivers<double>;
+
+    namespace aggregation {
+        initproc void initialize(void);
+    }
+}
