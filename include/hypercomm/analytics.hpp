@@ -143,8 +143,6 @@ void exit_handler_(void) {
   CmiSetHandler(env, CkpvAccess(send_stats_idx_));
   CmiSyncNodeBroadcastAllAndFree(env->getTotalsize(),
                                  reinterpret_cast<char*>(env));
-
-  CmiFree(env);
 }
 }
 

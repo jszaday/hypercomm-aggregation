@@ -22,7 +22,7 @@ inline int num_children(const int& n, const int& i) {
 
 template <typename T = int>
 struct ispace {
-  ispace() : t(IGNORE) {}
+  ispace(void) : t(IGNORE) {}
 
   ispace(const ispace<T>& is) : t(is.t), d(is.d) {}
 
