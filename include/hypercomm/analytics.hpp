@@ -5,6 +5,7 @@
 #include <sstream>
 
 #include <hypercomm/aggregation.hpp>
+#include <hypercomm/reductions.hpp>
 
 namespace aggregation {
 namespace detail {
@@ -14,20 +15,6 @@ struct stats_ {
   std::size_t nFlushes;
   double avgUtilizationAtFlush;
 };
-
-namespace binary_tree_ {
-inline int left_child(const int& i) { return (2 * i) + 1; }
-
-inline int right_child(const int& i) { return (2 * i) + 2; }
-
-inline int parent(const int& i) { return (i > 0) ? ((i - 1) / 2) : -1; }
-
-inline int num_leaves(const int& n) { return (n + 1) / 2; }
-
-inline int num_children(const int& n, const int& i) {
-  return (left_child(i) < n) + (right_child(i) < n);
-}
-}
 }
 }
 
@@ -38,7 +25,7 @@ namespace aggregation {
 namespace {
 using stats_registry_t = std::vector<detail::stats_>;
 using node_lock_t = std::mutex;
-CkpvDeclare(int, _recv_stats_idx);
+CkpvDeclare(int, send_stats_idx_);
 CksvDeclare(stats_registry_t, stats_registry_);
 #if CMK_SMP
 CksvDeclare(node_lock_t, node_lock_);
@@ -76,7 +63,7 @@ void unpack_stats_(const envelope* env, std::size_t& numStats,
   stats = reinterpret_cast<detail::stats_*>(buffer + sizeof(std::size_t));
 }
 
-envelope* merge_stats_fn_(envelope* left, envelope* right) {
+envelope* merge_stats_(envelope* left, envelope* right) {
   if (left == nullptr || left->getUsersize() == 0) {
     if (left) CmiFree(left);
     return right;
@@ -133,93 +120,44 @@ void print_stats_(const detail::stats_* reg, const std::size_t& szReg) {
   CkPrintf("%s\n", ss.str().c_str());
 }
 
-CsvDeclare(envelope*, sibling_);
-
 void recv_stats_(void* impl_msg_) {
+  detail::stats_* reg;
+  std::size_t szReg;
   auto env = static_cast<envelope*>(impl_msg_);
+  // otherwise, print the merged value
+  unpack_stats_(env, szReg, reg);
+  print_stats_(reg, szReg);
+  // and exit
+  CmiFree(env);
+  CkContinueExit();
+}
 
-  const auto self = CmiMyNode();
-  const auto left = detail::binary_tree_::left_child(self);
-  const auto right = detail::binary_tree_::right_child(self);
-  const auto parent = detail::binary_tree_::parent(self);
-  const auto nChildren =
-      detail::binary_tree_::num_children(CmiNumNodes(), self);
-
-#if CMK_SMP
-  CksvAccess(node_lock_).lock();
-#endif
-  envelope* sibling = nullptr;
-  if (nChildren == 2) {
-    if (CksvAccess(sibling_) == nullptr) {
-      CksvAccess(sibling_) =
-          merge_stats_fn_(env, pack_stats_(CksvAccess(stats_registry_)));
-      CkAssert(CksvAccess(sibling_) != nullptr);
-    } else {
-      sibling = CksvAccess(sibling_);
-    }
-  } else {
-    sibling = pack_stats_(CksvAccess(stats_registry_));
-  }
-#if CMK_SMP
-  CksvAccess(node_lock_).unlock();
-#endif
-
-  if (sibling == nullptr && nChildren == 2) {
-    // wait for the next message to arrive
-    return;
-  }
-
-  auto ours = merge_stats_fn_(env, sibling);
-
-  // if we are not the root node
-  if (parent >= 0) {
-    // send our merged value to our parent
-    CmiSetHandler(ours, CkpvAccess(_recv_stats_idx));
-    CmiSyncNodeSendAndFree(parent, ours->getTotalsize(),
-                           reinterpret_cast<char*>(ours));
-  } else {
-    detail::stats_* reg;
-    std::size_t szReg;
-    // otherwise, print the merged value
-    unpack_stats_(static_cast<envelope*>(ours), szReg, reg);
-    print_stats_(reg, szReg);
-    // and exit
-    CmiFree(ours);
-    CkContinueExit();
-  }
+void send_stats_(void* _) {
+  hypercomm::reductions::node::contribute(
+      pack_stats_(CksvAccess(stats_registry_)), &recv_stats_, &merge_stats_);
+  CmiFree(_);
 }
 
 void exit_handler_(void) {
-  auto n = CmiNumNodes();
-  auto l = detail::binary_tree_::num_leaves(n);
-
-  std::vector<int> leaves(l);
-  std::iota(std::begin(leaves), std::end(leaves), n - l);
-
   auto env = _allocEnv(CkEnvelopeType::ForBocMsg, 0);
-  CmiSetHandler(env, CkpvAccess(_recv_stats_idx));
-  for (const auto& leaf : leaves) {
-    CmiSyncNodeSendFn(leaf, env->getTotalsize(), reinterpret_cast<char*>(env));
-  }
-
-  CmiFree(env);
+  CmiSetHandler(env, CkpvAccess(send_stats_idx_));
+  CmiSyncNodeBroadcastAllAndFree(env->getTotalsize(),
+                                 reinterpret_cast<char*>(env));
 }
 }
 
 namespace analytics {
 
 inline void initialize(void) {
-  if (CkMyRank() == 0) {
 #if CMK_SMP
-    CksvInitialize(node_lock_t, node_lock_);
+  CksvInitialize(node_lock_t, node_lock_);
 #endif
-    CksvInitialize(envelope*, sibling_);
-    CksvAccess(sibling_) = nullptr;
-  }
 
-  CkpvInitialize(int, _recv_stats_idx);
-  CkpvAccess(_recv_stats_idx) =
-      CmiRegisterHandler(reinterpret_cast<CmiHandler>(&recv_stats_));
+  CkpvInitialize(int, send_stats_idx_);
+  CkpvAccess(send_stats_idx_) =
+      CmiRegisterHandler(reinterpret_cast<CmiHandler>(&send_stats_));
+
+  hypercomm::reductions::initialize();
 
   if (CkMyPe() == 0) {
     registerExitFn(reinterpret_cast<CkExitFn>(&exit_handler_));

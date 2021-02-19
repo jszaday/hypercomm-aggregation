@@ -84,7 +84,7 @@ struct aggregator : public detail::aggregator_base_ {
     if (ccsCondition != CcdIGNOREPE) {
       CcdCallOnConditionKeep(
           ccsCondition,
-          reinterpret_cast<CcdVoidFn>(&_on_condition), this);
+          reinterpret_cast<CcdVoidFn>(&on_condition_), this);
     }
   }
 
@@ -203,7 +203,7 @@ struct aggregator : public detail::aggregator_base_ {
   std::deque<double> mLastFlush;
   std::deque<std::mutex> mQueueLocks;
 
-  static void _on_condition(void* self) {
+  static void on_condition_(void* self) {
     static_cast<detail::aggregator_base_*>(self)->on_cond();
   }
 };
