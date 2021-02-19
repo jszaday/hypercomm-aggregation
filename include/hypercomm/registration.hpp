@@ -48,7 +48,7 @@ void unbundle_(envelope* env) {
   p | idx;
   p | nMsgs;
 
-  auto piranha = nodeLevel == piranha_magic_nbr_;
+  const auto piranha = nodeLevel == piranha_magic_nbr_;
   if (piranha) nodeLevel = 0;
 
   const auto node = CkMyNode();

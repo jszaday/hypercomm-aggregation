@@ -142,15 +142,15 @@ struct aggregator : public detail::aggregator_base_ {
 
   template <typename Fn>
   inline void send(const int& dest, const msg_size_t& size, const Fn& pupFn) {
-    auto destNode = mNodeLevel ? dest : CkNodeOf(dest);
-    auto mine = CkMyNode();
+    const auto destNode = mNodeLevel ? dest : CkNodeOf(dest);
+    const auto mine = CkMyNode();
     // query the router about where we should send the value
     auto next = mRouter.next(mine, destNode);
     // route it directly to our send queue if it would go to us
     if (next == mine) next = destNode;
     CkAssert(next < nElements && "invalid destination");
-    auto header = detail::header_{.dest = dest, .size = size};
-    auto tsize = sizeof(header) + size;
+    detail::header_ header = {.dest = dest, .size = size};
+    const auto tsize = sizeof(header) + size;
     QdCreate(1);
     if (mNodeLevel) mQueueLocks[next].lock();
     auto buff = mBuffer.get_buffer(next, tsize);
