@@ -226,7 +226,7 @@ struct array_aggregator
   }
 
   inline void send(const CProxyElement_ArrayElement& element, const Ts&... const_ts) {
-    CkAssert(id == (CkArrayID)element);
+    CkAssert(CkArrayID{mArray->getGroupID()} == (CkArrayID)element);
     this->send(element.ckGetIndex(), const_ts...);
   }
 
