@@ -34,7 +34,7 @@ using endpoint_id_t = std::size_t;
 using msg_queue_t = std::deque<std::pair<msg_size_t, std::shared_ptr<char>>>;
 using endpoint_fn_t = std::function<void(const msg_size_t&, char*)>;
 
-CkpvExtern(int, _bundleIdx);
+CkpvExtern(int, bundle_idx_);
 
 template <typename Fn>
 endpoint_fn_t copy2msg(const Fn& fn) {
@@ -68,7 +68,7 @@ struct aggregator : public detail::aggregator_base_ {
              double flushTimeout, const endpoint_fn_t& endpoint,
              bool nodeLevel = false, int ccsCondition = CcdIGNOREPE)
       : mNodeLevel(nodeLevel),
-        nElements(mNodeLevel ? CkNumNodes() : CkNumPes()),
+        nElements(CkNumNodes()),
         mUtilizationCap(utilizationCap),
         mFlushTimeout(flushTimeout),
         mBuffer(arg, 3 * sizeof(int), nElements),
@@ -88,8 +88,8 @@ struct aggregator : public detail::aggregator_base_ {
     }
   }
 
-  inline bool timed_out(const int& pe) {
-    auto& last = mLastFlush[pe];
+  inline bool timed_out(const int& node) {
+    auto& last = mLastFlush[node];
     if (last == 0.0) {
       last = CkWallTimer();
       return false;
@@ -98,38 +98,35 @@ struct aggregator : public detail::aggregator_base_ {
     }
   }
 
-  inline bool should_flush(const int& pe) {
-    return (mBuffer.utilization(pe) >= mUtilizationCap) || timed_out(pe);
+  inline bool should_flush(const int& node) {
+    return (mBuffer.utilization(node) >= mUtilizationCap) || timed_out(node);
   }
 
-  void flush(const int& pe) {
+  void flush(const int& node) {
     int ndLvl = static_cast<int>(mNodeLevel);
     int idx = static_cast<int>(mEndpoint);
-    int nMsgs = mCounts[pe].load();
+    int nMsgs = mCounts[node].load();
 #ifdef HYPERCOMM_TRACING_ON
-    analytics::tally_flush(idx, mBuffer.utilization(pe));
+    analytics::tally_flush(idx, mBuffer.utilization(node));
 #endif
-    auto env = mBuffer.flush(pe);
+    auto env = mBuffer.flush(node);
     PUP::toMem p(EnvToUsr(env));
 
     p | ndLvl;
     p | idx;
     p | nMsgs;
 
-    CmiSetHandler(env, CkpvAccess(_bundleIdx));
-    if (mNodeLevel) {
-      if (pe != CmiMyNode()) {
-        CmiSyncNodeSendAndFree(pe, env->getTotalsize(),
-                               reinterpret_cast<char*>(env));
-      } else {
-        CsdNodeEnqueue(env);
-      }
+    CmiSetHandler(env, CkpvAccess(bundle_idx_));
+
+    if (node == CmiMyNode()) {
+      CsdNodeEnqueue(env);
     } else {
-      CmiSyncSendAndFree(pe, env->getTotalsize(), reinterpret_cast<char*>(env));
+      CmiSyncNodeSendAndFree(node, env->getTotalsize(),
+                             reinterpret_cast<char*>(env));
     }
 
-    mLastFlush[pe] = CkWallTimer();
-    mCounts[pe].store(0);
+    mLastFlush[node] = CkWallTimer();
+    mCounts[node].store(0);
   }
 
   virtual void on_cond(void) override {
@@ -144,15 +141,16 @@ struct aggregator : public detail::aggregator_base_ {
   }
 
   template <typename Fn>
-  inline void send(const int& pe, const msg_size_t& size, const Fn& pupFn) {
-    auto mine = mNodeLevel ? CkMyNode() : CkMyPe();
+  inline void send(const int& dest, const msg_size_t& size, const Fn& pupFn) {
+    const auto destNode = mNodeLevel ? dest : CkNodeOf(dest);
+    const auto mine = CkMyNode();
     // query the router about where we should send the value
-    auto next = mRouter.next(mine, pe);
+    auto next = mRouter.next(mine, destNode);
     // route it directly to our send queue if it would go to us
-    if (next == mine) next = pe;
+    if (next == mine) next = destNode;
     CkAssert(next < nElements && "invalid destination");
-    auto header = detail::header_{.dest = pe, .size = size};
-    auto tsize = sizeof(header) + size;
+    detail::header_ header = {.dest = dest, .size = size};
+    const auto tsize = sizeof(header) + size;
     QdCreate(1);
     if (mNodeLevel) mQueueLocks[next].lock();
     auto buff = mBuffer.get_buffer(next, tsize);
@@ -178,16 +176,16 @@ struct aggregator : public detail::aggregator_base_ {
     if (mNodeLevel) mQueueLocks[next].unlock();
   }
 
-  virtual void send(const int& pe, const msg_size_t& size,
+  virtual void send(const int& dest, const msg_size_t& size,
                     char* data) override {
-    send(pe, size,
+    send(dest, size,
          [&](PUP::er& p) { p(data, static_cast<std::size_t>(size)); });
   }
 
-  void send(const int& pe, const Ts&... const_ts) {
+  void send(const int& dest, const Ts&... const_ts) {
     auto args = std::forward_as_tuple(const_cast<Ts&>(const_ts)...);
     auto size = static_cast<msg_size_t>(PUP::size(args));
-    send(pe, size, [&](PUP::er& p) { p | args; });
+    send(dest, size, [&](PUP::er& p) { p | args; });
   }
 
  private:
