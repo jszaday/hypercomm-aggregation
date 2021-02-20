@@ -39,13 +39,20 @@ constexpr bool kRandomizeSends = true;
 constexpr bool kRandomizeSends = false;
 #endif
 
+struct PacketMsg: CMessage_PacketMsg {
+  char* payload;
+};
+
 template <typename T>
 class Transceivers : public CBase_Transceivers<T> {
   using buffer_t =
       typename std::conditional<kDirectBuffer, aggregation::direct_buffer,
                                 aggregation::dynamic_buffer>::type;
-  using aggregator_t = aggregation::array_aggregator<buffer_t, router_t, T>;
-  std::unique_ptr<aggregator_t> aggregator;
+  using val_aggregator_t = aggregation::array_aggregator<buffer_t, router_t, T>;
+  std::unique_ptr<val_aggregator_t> val_aggregator;
+
+  using msg_aggregator_t = aggregation::array_aggregator<buffer_t, router_t, PacketMsg*>;
+  std::unique_ptr<msg_aggregator_t> msg_aggregator;
 
   int nIters, nElements;
   std::atomic<int> nRecvd;
@@ -73,8 +80,11 @@ class Transceivers : public CBase_Transceivers<T> {
     auto cond = CcdPROCESSOR_STILL_IDLE;
     auto idx = CkIndex_Transceivers<T>::receive_value(T{});
 
-    aggregator = std::unique_ptr<aggregator_t>(
-        new aggregator_t(this->thisProxy, idx, bufArg, cutoff, 0.05, kNodeLevel, cond));
+    val_aggregator = std::unique_ptr<val_aggregator_t>(
+        new val_aggregator_t(this->thisProxy, idx, bufArg, cutoff, 0.05, kNodeLevel, cond));
+
+    msg_aggregator = std::unique_ptr<msg_aggregator_t>(
+        new msg_aggregator_t(this->thisProxy, idx, bufArg, cutoff, 0.05, kNodeLevel, cond));
 
     this->contribute(
       CkCallback(CkIndex_Transceivers<T>::send_values(), this->thisProxy));
@@ -100,11 +110,19 @@ class Transceivers : public CBase_Transceivers<T> {
 
   void receive_value(const T& f) { nRecvd++; }
 
+  void receive_value(PacketMsg* msg) { nRecvd++; CmiFree(msg); }
+
   void send_values(void) {
     for (auto i = 0; i < nIters; i++) {
       for (auto j = 0; j < nElements; j++) {
         int dest = kRandomizeSends ? (std::rand() % nElements) : j;
-        aggregator->send(this->thisProxy[dest], static_cast<T>((i + 1) * (j + 1)));
+        if (j % 2 == 0) {
+          val_aggregator->send(this->thisProxy[dest], static_cast<T>((i + 1) * (j + 1)));
+        } else {
+          auto sz = std::rand() % nIters + 1;
+          auto msg = new (sz) PacketMsg();
+          msg_aggregator->send(this->thisProxy[dest], msg);
+        }
       }
     }
   }
