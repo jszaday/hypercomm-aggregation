@@ -7,22 +7,10 @@
 #include <hypercomm/aggregation.hpp>
 #include <hypercomm/registration.hpp>
 
-#ifdef NODE_LEVEL
-constexpr bool kNodeLevel = true;
-#else
-constexpr bool kNodeLevel = false;
-#endif
-
 #ifdef DIRECT_BUFFER
 constexpr bool kDirectBuffer = true;
 #else
 constexpr bool kDirectBuffer = false;
-#endif
-
-#ifdef INLINE_SEND
-constexpr bool kCopy2Msg = false;
-#else
-constexpr bool kCopy2Msg = true;
 #endif
 
 #ifdef DIRECT_ROUTE
@@ -39,56 +27,48 @@ constexpr bool kRandomizeSends = true;
 constexpr bool kRandomizeSends = false;
 #endif
 
+#ifndef SCALING_FACTOR
+#define SCALING_FACTOR 4
+#endif
+
+constexpr bool kNodeLevel = false;
+constexpr int kScalingFactor = SCALING_FACTOR;
+
 struct PacketMsg : CMessage_PacketMsg {
   char* payload;
 };
+
+using base_t = aggregation::detail::aggregator_base_;
+using aggregators_t = std::vector<std::shared_ptr<base_t>>;
+CkpvDeclare(aggregators_t, aggregators_);
 
 template <typename T>
 class Transceivers : public CBase_Transceivers<T> {
   using buffer_t =
       typename std::conditional<kDirectBuffer, aggregation::direct_buffer,
                                 aggregation::dynamic_buffer>::type;
-  using val_aggregator_t = aggregation::array_aggregator<buffer_t, router_t, T>;
-  std::unique_ptr<val_aggregator_t> val_aggregator;
+
+  using val_aggregator_t =
+      aggregation::array_aggregator<buffer_t, router_t, T>;
+  std::shared_ptr<val_aggregator_t> val_aggregator;
 
   using msg_aggregator_t =
       aggregation::array_aggregator<buffer_t, router_t, PacketMsg*>;
-  std::unique_ptr<msg_aggregator_t> msg_aggregator;
+  std::shared_ptr<msg_aggregator_t> msg_aggregator;
 
-  int nIters, nElements;
-  std::atomic<int> nRecvd;
+  int nIters, nElements, nRecvd, nExpected;
 
  public:
+  Transceivers(CkMigrateMessage*) {}
+
   Transceivers(int _nIters, int _nElements)
-      : nIters(_nIters), nElements(_nElements), nRecvd(0) {
+      : nIters(_nIters), nElements(_nElements), nRecvd(0), nExpected(nIters * nElements) {
     std::srand(static_cast<unsigned int>(CkWallTimer()));
 
-    auto flushPeriod = nIters / 2;
-    auto bufArg = kDirectBuffer
-                      ? flushPeriod * (sizeof(double) +
-                                       sizeof(aggregation::detail::header_))
-                      : flushPeriod;
-    auto cutoff = kDirectBuffer ? 0.85 : 1.0;
+    this->usesAtSync = true;
+    this->setMigratable(true);
 
-    if (this->thisIndex == 0) {
-      if (kDirectBuffer) {
-        CkPrintf("[INFO] Using buffers of size %.3f KB.\n", bufArg / 1024.0);
-      } else {
-        CkPrintf("[INFO] Setting max messages to %zu.\n", bufArg);
-      }
-    }
-
-    // a periodic condition is typically necessary for non-direct routing
-    auto cond = CcdPROCESSOR_STILL_IDLE;
-
-    val_aggregator = std::unique_ptr<val_aggregator_t>(new val_aggregator_t(
-        this->thisProxy, CkIndex_Transceivers<T>::receive_value(T{}), bufArg,
-        cutoff, 0.05, kNodeLevel, cond));
-
-    msg_aggregator = std::unique_ptr<msg_aggregator_t>(new msg_aggregator_t(
-        this->thisProxy,
-        CkIndex_Transceivers<T>::receive_value((PacketMsg*)nullptr), bufArg,
-        cutoff, 0.05, kNodeLevel, cond));
+    this->initialize_aggregators_(false);
 
     this->contribute(
         CkCallback(CkIndex_Transceivers<T>::send_values(), this->thisProxy));
@@ -101,8 +81,7 @@ class Transceivers : public CBase_Transceivers<T> {
   }
 
   void check_count(int sum) {
-    auto nExpected = nIters * nElements * nElements;
-    if (sum == nExpected) {
+    if (sum == nElements * nExpected) {
       CkPrintf("[INFO] All values received, done.\n");
       CkExit();
     } else {
@@ -111,18 +90,29 @@ class Transceivers : public CBase_Transceivers<T> {
     }
   }
 
-  void receive_value(const T& f) { nRecvd++; }
+  inline void count_value(void) {
+    if ((++nRecvd % (nExpected / 2)) == 0 && nRecvd < nExpected) {
+      if (this->thisIndex == 0) {
+        CkPrintf("[INFO] Invoking at sync.\n");
+      }
+      this->AtSync();
+    }
+  }
+
+  void receive_value(const T& f) { this->count_value(); }
 
   void receive_value(PacketMsg* msg) {
-    nRecvd++;
+    this->count_value();
     CmiFree(msg);
   }
 
   void send_values(void) {
     for (auto i = 0; i < nIters; i++) {
       for (auto j = 0; j < nElements; j++) {
-        int dest = kRandomizeSends ? (std::rand() % nElements) : j;
-        if (j % 2 == 0) {
+        auto dest = kRandomizeSends ? (std::rand() % nElements) : j;
+        auto sendValue = kRandomizeSends ? (bool)(std::rand() % 2) : (j % 2 == 0);
+
+        if (sendValue) {
           val_aggregator->send(this->thisProxy[dest],
                                static_cast<T>((i + 1) * (j + 1)));
         } else {
@@ -133,12 +123,69 @@ class Transceivers : public CBase_Transceivers<T> {
       }
     }
   }
+
+  void pup(PUP::er& p) {
+    p | nIters;
+    p | nElements;
+    p | nRecvd;
+    p | nExpected;
+  }
+
+  virtual void ResumeFromSync(void) override {
+    this->initialize_aggregators_(true);
+  }
+
+ private:
+  void initialize_aggregators_(bool migration) {
+    auto flushPeriod = nIters / 2;
+    auto bufArg = kDirectBuffer
+                      ? flushPeriod * (sizeof(double) +
+                                       sizeof(aggregation::detail::header_))
+                      : flushPeriod;
+    auto cutoff = kDirectBuffer ? 0.85 : 1.0;
+
+    if (this->thisIndex == 0 && !migration) {
+      CkPrintf("[INFO] Created %d array elements.\n", nElements);
+
+      if (kDirectBuffer) {
+        CkPrintf("[INFO] Using buffers of size %.3f KB.\n", bufArg / 1024.0);
+      } else {
+        CkPrintf("[INFO] Setting max messages to %zu.\n", bufArg);
+      }
+    }
+
+    // a periodic condition is typically necessary for non-direct routing
+    auto cond = CcdPROCESSOR_STILL_IDLE;
+
+    if (!CkpvInitialized(aggregators_) && !migration) {
+      val_aggregator = std::make_shared<val_aggregator_t>(
+          this->thisProxy, CkIndex_Transceivers<T>::receive_value(T{}), bufArg,
+          cutoff, 0.05, kNodeLevel, cond);
+
+      msg_aggregator = std::make_shared<msg_aggregator_t>(
+          this->thisProxy,
+          CkIndex_Transceivers<T>::receive_value((PacketMsg*)nullptr), bufArg,
+          cutoff, 0.05, kNodeLevel, cond);
+
+      CkpvInitialize(aggregators_t, aggregators_);
+      CkpvAccess(aggregators_) = {
+          std::static_pointer_cast<base_t>(val_aggregator),
+          std::static_pointer_cast<base_t>(msg_aggregator)};
+    } else {
+      CkAssert(CkpvInitialized(aggregators_));
+
+      val_aggregator = std::static_pointer_cast<val_aggregator_t>(
+          CkpvAccess(aggregators_)[0]);
+      msg_aggregator = std::static_pointer_cast<msg_aggregator_t>(
+          CkpvAccess(aggregators_)[1]);
+    }
+  }
 };
 
 class Main : public CBase_Main {
  public:
   Main(CkArgMsg* msg) {
-    int nElements = CkNumPes();
+    int nElements = kScalingFactor * CkNumPes();
     int nIters = 2 * 1024;
     CProxy_Transceivers<double> ts =
         CProxy_Transceivers<double>::ckNew(nIters, nElements, nElements);

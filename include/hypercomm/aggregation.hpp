@@ -224,7 +224,7 @@ using wrap_msg_t = typename std::conditional<is_message_t<Ts...>(),
 }
 
 template <typename Buffer, typename Router, typename... Ts>
-struct array_aggregator : private aggregator<Buffer, Router, CkArrayIndex,
+struct array_aggregator : public aggregator<Buffer, Router, CkArrayIndex,
                                              detail::wrap_msg_t<Ts...>> {
   using buffer_arg_t = typename Buffer::arg_t;
   using parent_t =

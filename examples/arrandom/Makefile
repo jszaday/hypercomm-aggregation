@@ -2,6 +2,8 @@ CHARMC=$(CHARM_HOME)/bin/charmc -g3 $(OPTS) -I../../include
 BINARY = arrandom
 OBJS = $(BINARY).o
 
+OPTS := $(OPTS) -module CommonLBs
+
 all: $(BINARY)
 
 $(BINARY): $(OBJS)
@@ -17,4 +19,4 @@ $(BINARY).o: $(BINARY).cc $(BINARY).decl.h
 	$(CHARMC) -c $(BINARY).cc
 
 test: all
-	./charmrun ++local ++auto-provision ./$(BINARY) 10
+	./charmrun ++local ++auto-provision ./$(BINARY) +LBDebug 1 +balancer GreedyRefineLB
