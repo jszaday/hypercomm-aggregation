@@ -1,6 +1,6 @@
 #include "arrandom.decl.h"
 
-#include <cstdlib> 
+#include <cstdlib>
 #include <type_traits>
 
 #include <hypercomm/routing.hpp>
@@ -39,7 +39,7 @@ constexpr bool kRandomizeSends = true;
 constexpr bool kRandomizeSends = false;
 #endif
 
-struct PacketMsg: CMessage_PacketMsg {
+struct PacketMsg : CMessage_PacketMsg {
   char* payload;
 };
 
@@ -51,21 +51,23 @@ class Transceivers : public CBase_Transceivers<T> {
   using val_aggregator_t = aggregation::array_aggregator<buffer_t, router_t, T>;
   std::unique_ptr<val_aggregator_t> val_aggregator;
 
-  using msg_aggregator_t = aggregation::array_aggregator<buffer_t, router_t, PacketMsg*>;
+  using msg_aggregator_t =
+      aggregation::array_aggregator<buffer_t, router_t, PacketMsg*>;
   std::unique_ptr<msg_aggregator_t> msg_aggregator;
 
   int nIters, nElements;
   std::atomic<int> nRecvd;
 
  public:
-  Transceivers(int _nIters, int _nElements) : nIters(_nIters), nElements(_nElements), nRecvd(0) {
+  Transceivers(int _nIters, int _nElements)
+      : nIters(_nIters), nElements(_nElements), nRecvd(0) {
     std::srand(static_cast<unsigned int>(CkWallTimer()));
 
     auto flushPeriod = nIters / 2;
-    auto bufArg =
-        kDirectBuffer
-            ? flushPeriod * (sizeof(double) + sizeof(aggregation::detail::header_))
-            : flushPeriod;
+    auto bufArg = kDirectBuffer
+                      ? flushPeriod * (sizeof(double) +
+                                       sizeof(aggregation::detail::header_))
+                      : flushPeriod;
     auto cutoff = kDirectBuffer ? 0.85 : 1.0;
 
     if (this->thisIndex == 0) {
@@ -78,23 +80,24 @@ class Transceivers : public CBase_Transceivers<T> {
 
     // a periodic condition is typically necessary for non-direct routing
     auto cond = CcdPROCESSOR_STILL_IDLE;
-    auto idx = CkIndex_Transceivers<T>::receive_value(T{});
 
-    val_aggregator = std::unique_ptr<val_aggregator_t>(
-        new val_aggregator_t(this->thisProxy, idx, bufArg, cutoff, 0.05, kNodeLevel, cond));
+    val_aggregator = std::unique_ptr<val_aggregator_t>(new val_aggregator_t(
+        this->thisProxy, CkIndex_Transceivers<T>::receive_value(T{}), bufArg,
+        cutoff, 0.05, kNodeLevel, cond));
 
-    msg_aggregator = std::unique_ptr<msg_aggregator_t>(
-        new msg_aggregator_t(this->thisProxy, idx, bufArg, cutoff, 0.05, kNodeLevel, cond));
+    msg_aggregator = std::unique_ptr<msg_aggregator_t>(new msg_aggregator_t(
+        this->thisProxy,
+        CkIndex_Transceivers<T>::receive_value((PacketMsg*)nullptr), bufArg,
+        cutoff, 0.05, kNodeLevel, cond));
 
     this->contribute(
-      CkCallback(CkIndex_Transceivers<T>::send_values(), this->thisProxy));
+        CkCallback(CkIndex_Transceivers<T>::send_values(), this->thisProxy));
   }
 
   void contribute_count(void) {
-    this->contribute(sizeof(int), &nRecvd, CkReduction::sum_int, CkCallback(
-      CkReductionTarget(Transceivers<T>, check_count),
-      this->thisProxy[0]
-    ));
+    this->contribute(sizeof(int), &nRecvd, CkReduction::sum_int,
+                     CkCallback(CkReductionTarget(Transceivers<T>, check_count),
+                                this->thisProxy[0]));
   }
 
   void check_count(int sum) {
@@ -110,14 +113,18 @@ class Transceivers : public CBase_Transceivers<T> {
 
   void receive_value(const T& f) { nRecvd++; }
 
-  void receive_value(PacketMsg* msg) { nRecvd++; CmiFree(msg); }
+  void receive_value(PacketMsg* msg) {
+    nRecvd++;
+    CmiFree(msg);
+  }
 
   void send_values(void) {
     for (auto i = 0; i < nIters; i++) {
       for (auto j = 0; j < nElements; j++) {
         int dest = kRandomizeSends ? (std::rand() % nElements) : j;
         if (j % 2 == 0) {
-          val_aggregator->send(this->thisProxy[dest], static_cast<T>((i + 1) * (j + 1)));
+          val_aggregator->send(this->thisProxy[dest],
+                               static_cast<T>((i + 1) * (j + 1)));
         } else {
           auto sz = std::rand() % nIters + 1;
           auto msg = new (sz) PacketMsg();
@@ -133,7 +140,8 @@ class Main : public CBase_Main {
   Main(CkArgMsg* msg) {
     int nElements = CkNumPes();
     int nIters = 2 * 1024;
-    CProxy_Transceivers<double> ts = CProxy_Transceivers<double>::ckNew(nIters, nElements, nElements);
+    CProxy_Transceivers<double> ts =
+        CProxy_Transceivers<double>::ckNew(nIters, nElements, nElements);
     CkStartQD(CkCallback(CkIndex_Transceivers<double>::contribute_count(), ts));
   }
 };
