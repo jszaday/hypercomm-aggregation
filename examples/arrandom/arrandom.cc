@@ -103,7 +103,8 @@ class Transceivers : public CBase_Transceivers<T> {
 
   void receive_value(PacketMsg* msg) {
     this->count_value();
-    CmiFree(msg);
+
+    delete msg;
   }
 
   void send_values(void) {
