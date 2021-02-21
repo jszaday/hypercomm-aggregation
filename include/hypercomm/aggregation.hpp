@@ -71,8 +71,8 @@ struct aggregator : public detail::aggregator_base_ {
   //   CcdPERIODIC_10ms or CcdPROCESSOR_STILL_IDLE
   // see converse.h for the full listing
   aggregator(const buffer_arg_t& arg, double utilizationCap,
-             double flushTimeout, const endpoint_fn_t& endpoint,
-             bool nodeLevel, bool enableLocks, int ccsCondition)
+             double flushTimeout, const endpoint_fn_t& endpoint, bool nodeLevel,
+             bool enableLocks, int ccsCondition)
       : mNodeLevel(nodeLevel),
         nElements(CkNumNodes()),
         mUtilizationCap(utilizationCap),
@@ -232,17 +232,18 @@ using wrap_msg_t = typename std::conditional<is_message_t<Ts...>(),
 }
 
 template <typename Buffer, typename Router, typename... Ts>
-struct array_aggregator : public aggregator<Buffer, Router, CkArrayIndex,
-                                             detail::wrap_msg_t<Ts...>> {
+struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
+                                            detail::wrap_msg_t<Ts...>> {
   using buffer_arg_t = typename Buffer::arg_t;
   using parent_t =
-      aggregator<Buffer, Router, CkArrayIndex, detail::wrap_msg_t<Ts...>>;
+      aggregator<Buffer, Router, int, CkArrayIndex, detail::wrap_msg_t<Ts...>>;
 
   array_aggregator(const CkArrayID& id, int entryIndex, const buffer_arg_t& arg,
                    double utilizationCap, double flushTimeout,
                    bool enableLocks = false, int ccsCondition = CcdIGNOREPE)
       : parent_t(arg, utilizationCap, flushTimeout,
-                 make_endpoint_fn_(id, entryIndex), false, enableLocks, ccsCondition),
+                 make_endpoint_fn_(id, entryIndex), false, enableLocks,
+                 ccsCondition),
         mArray(static_cast<CkArray*>(_localBranch(id))) {
     CkAssert(mArray != nullptr);
   }
@@ -255,12 +256,12 @@ struct array_aggregator : public aggregator<Buffer, Router, CkArrayIndex,
 
   inline void send(const CkArrayIndex& idx, const Ts&... const_ts,
                    std::false_type) {
-    parent_t::send(mArray->lastKnown(idx), idx, const_ts...);
+    parent_t::send(CkMyPe(), mArray->lastKnown(idx), idx, const_ts...);
   }
 
   inline void send(const CkArrayIndex& idx, const Ts&... const_ts,
                    std::true_type) {
-    parent_t::send(mArray->lastKnown(idx), idx,
+    parent_t::send(CkMyPe(), mArray->lastKnown(idx), idx,
                    CkMarshalledMessage{const_ts...});
   }
 
@@ -278,9 +279,11 @@ struct array_aggregator : public aggregator<Buffer, Router, CkArrayIndex,
   static inline endpoint_fn_t make_endpoint_fn_(const CkArrayID& id,
                                                 const int& entryIndex) {
     return [id, entryIndex](const msg_size_t& sz, char* begin) {
-      auto end = begin + sz - sizeof(CkArrayIndex);
       // tuples are currently pup'd in reverse so we grab the idx from the end
+      const auto end = begin + sz - sizeof(CkArrayIndex) - sizeof(int);
       const auto& idx = *(reinterpret_cast<CkArrayIndex*>(end));
+      const auto& src = *(reinterpret_cast<int*>(end + sizeof(CkArrayIndex)));
+      auto& arr = *(static_cast<CkArray*>(_localBranch(id)));
 
       CkMessage* msg;
       if (message_mode_) {
@@ -291,8 +294,14 @@ struct array_aggregator : public aggregator<Buffer, Router, CkArrayIndex,
         std::copy(begin, end, ((CkMarshallMsg*)msg)->msgBuf);
       }
 
+      auto env = UsrToEnv(static_cast<void*>(msg));
+      env->setArrayMgr(id);
+      env->getsetArraySrcPe() = src;
+      env->setEpIdx(entryIndex);
+      env->getsetArrayHops() = 2 * (arr.lookup(idx) == nullptr);
       CkSetMsgArrayIfNotThere(msg);
-      CkSendMsgArray(entryIndex, msg, id, idx, 0);
+
+      arr.deliver(msg, idx, CkDeliver_queue, 0);
     };
   }
 };
