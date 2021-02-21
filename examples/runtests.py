@@ -13,8 +13,7 @@ oversub_deg = 2
 max_pes = oversub_deg * cpu_count()
 success_threshold = 0.5
 reliability_threshold = 0.98
-
-pes = range(1, max_pes + 1)
+pes = []
 
 def get_factors(x):
     for i in range(1, x + 1):
@@ -76,13 +75,14 @@ def build_and_run(cwd, name, opts, verbose=False):
     else:
         return [("make",)]
 
+all_failures = []
 pwd = os.path.dirname(os.path.realpath(__file__))
+
+pes = range(1, max_pes + 1)
 all_opts = [ list(x) for x in powerset([ \
     "-DDIRECT_ROUTE", "-DNODE_LEVEL", "-DDIRECT_BUFFER", "-DINLINE_SEND", "-DRANDOMIZE_SENDS" ]) ]
 all_opts = [ [ "-DHYPERCOMM_TRACING_ON" ] ] + all_opts
 num_tests = len(all_opts) * sum( len(list(get_factors(p))) for p in pes )
-
-all_failures = []
 for opts in all_opts:
     transceivers = os.path.join(pwd, "transceivers")
     print("filename:", transceivers)

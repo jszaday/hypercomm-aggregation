@@ -35,4 +35,4 @@ jobs:
       run: |
         export CHARM_HOME=$GITHUB_WORKSPACE/charm
         cd examples/
-        python3 ./runtests.py
+        python3 -u ./runtests.py
