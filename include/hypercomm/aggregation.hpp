@@ -61,12 +61,18 @@ struct aggregator;
 template <typename Buffer, typename Router, typename... Ts>
 struct aggregator : public detail::aggregator_base_ {
   using buffer_arg_t = typename Buffer::arg_t;
+  aggregator(const buffer_arg_t& arg, double utilizationCap,
+             double flushTimeout, const endpoint_fn_t& endpoint,
+             bool nodeLevel = false, int ccsCondition = CcdIGNOREPE)
+      : aggregator(arg, utilizationCap, flushTimeout, endpoint, nodeLevel,
+                   nodeLevel, ccsCondition) {}
+
   // example conditions may be:
   //   CcdPERIODIC_10ms or CcdPROCESSOR_STILL_IDLE
   // see converse.h for the full listing
   aggregator(const buffer_arg_t& arg, double utilizationCap,
              double flushTimeout, const endpoint_fn_t& endpoint,
-             bool nodeLevel = false, int ccsCondition = CcdIGNOREPE)
+             bool nodeLevel, bool enableLocks, int ccsCondition)
       : mNodeLevel(nodeLevel),
         nElements(CkNumNodes()),
         mUtilizationCap(utilizationCap),
@@ -74,7 +80,8 @@ struct aggregator : public detail::aggregator_base_ {
         mBuffer(arg, 3 * sizeof(int), nElements),
         mRouter(nElements),
         mLastFlush(nElements),
-        mQueueLocks(nodeLevel ? nElements : 0) {
+        mLocksEnabled(enableLocks),
+        mQueueLocks(mLocksEnabled ? nElements : 0) {
     mEndpoint = register_endpoint_fn(this, endpoint, nodeLevel);
 
     for (auto i = 0; i < nElements; i += 1) {
@@ -129,13 +136,13 @@ struct aggregator : public detail::aggregator_base_ {
   }
 
   virtual void on_cond(void) override {
-    CkAssert(!mNodeLevel || !mQueueLocks.empty());
+    CkAssert(!mLocksEnabled || !mQueueLocks.empty());
     for (auto pe = 0; pe < nElements; pe++) {
-      if (mNodeLevel) mQueueLocks[pe].lock();
+      if (mLocksEnabled) mQueueLocks[pe].lock();
       if (mCounts[pe] != 0 && timed_out(pe)) {
         flush(pe);
       }
-      if (mNodeLevel) mQueueLocks[pe].unlock();
+      if (mLocksEnabled) mQueueLocks[pe].unlock();
     }
   }
 
@@ -151,7 +158,7 @@ struct aggregator : public detail::aggregator_base_ {
     detail::header_ header = {.dest = dest, .size = size};
     const auto tsize = sizeof(header) + size;
     QdCreate(1);
-    if (mNodeLevel) mQueueLocks[next].lock();
+    if (mLocksEnabled) mQueueLocks[next].lock();
     auto buff = mBuffer.get_buffer(next, tsize);
     if (buff == nullptr) {
       // assume a capacity failure, and flush
@@ -172,7 +179,7 @@ struct aggregator : public detail::aggregator_base_ {
       CkAbort("pup failure");
     }
     if (should_flush(next)) flush(next);
-    if (mNodeLevel) mQueueLocks[next].unlock();
+    if (mLocksEnabled) mQueueLocks[next].unlock();
   }
 
   virtual void send(const int& dest, const msg_size_t& size,
@@ -189,6 +196,7 @@ struct aggregator : public detail::aggregator_base_ {
 
  private:
   bool mNodeLevel;
+  bool mLocksEnabled;
   int nElements;
   double mUtilizationCap;
   double mFlushTimeout;
@@ -232,9 +240,9 @@ struct array_aggregator : public aggregator<Buffer, Router, CkArrayIndex,
 
   array_aggregator(const CkArrayID& id, int entryIndex, const buffer_arg_t& arg,
                    double utilizationCap, double flushTimeout,
-                   bool nodeLevel = false, int ccsCondition = CcdIGNOREPE)
+                   bool enableLocks = false, int ccsCondition = CcdIGNOREPE)
       : parent_t(arg, utilizationCap, flushTimeout,
-                 make_endpoint_fn_(id, entryIndex), nodeLevel, ccsCondition),
+                 make_endpoint_fn_(id, entryIndex), false, enableLocks, ccsCondition),
         mArray(static_cast<CkArray*>(_localBranch(id))) {
     CkAssert(mArray != nullptr);
   }
