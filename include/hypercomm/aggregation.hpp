@@ -295,7 +295,9 @@ struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
       }
 
       auto env = UsrToEnv(static_cast<void*>(msg));
-      env->setArrayMgr(id);
+      env->setMsgtype(ForArrayEltMsg);
+      env->setArrayMgr((CkGroupID)id);
+      env->setRecipientID(ck::ObjID(0));
       env->getsetArraySrcPe() = src;
       env->setEpIdx(entryIndex);
       env->getsetArrayHops() = 2 * (arr.lookup(idx) == nullptr);
