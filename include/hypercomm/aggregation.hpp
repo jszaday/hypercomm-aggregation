@@ -61,12 +61,18 @@ struct aggregator;
 template <typename Buffer, typename Router, typename... Ts>
 struct aggregator : public detail::aggregator_base_ {
   using buffer_arg_t = typename Buffer::arg_t;
+  aggregator(const buffer_arg_t& arg, double utilizationCap,
+             double flushTimeout, const endpoint_fn_t& endpoint,
+             bool nodeLevel = false, int ccsCondition = CcdIGNOREPE)
+      : aggregator(arg, utilizationCap, flushTimeout, endpoint, nodeLevel,
+                   nodeLevel, ccsCondition) {}
+
   // example conditions may be:
   //   CcdPERIODIC_10ms or CcdPROCESSOR_STILL_IDLE
   // see converse.h for the full listing
   aggregator(const buffer_arg_t& arg, double utilizationCap,
-             double flushTimeout, const endpoint_fn_t& endpoint,
-             bool nodeLevel = false, int ccsCondition = CcdIGNOREPE)
+             double flushTimeout, const endpoint_fn_t& endpoint, bool nodeLevel,
+             bool enableLocks, int ccsCondition)
       : mNodeLevel(nodeLevel),
         nElements(CkNumNodes()),
         mUtilizationCap(utilizationCap),
@@ -74,7 +80,8 @@ struct aggregator : public detail::aggregator_base_ {
         mBuffer(arg, 3 * sizeof(int), nElements),
         mRouter(nElements),
         mLastFlush(nElements),
-        mQueueLocks(nodeLevel ? nElements : 0) {
+        mLocksEnabled(enableLocks),
+        mQueueLocks(mLocksEnabled ? nElements : 0) {
     mEndpoint = register_endpoint_fn(this, endpoint, nodeLevel);
 
     for (auto i = 0; i < nElements; i += 1) {
@@ -82,9 +89,8 @@ struct aggregator : public detail::aggregator_base_ {
     }
 
     if (ccsCondition != CcdIGNOREPE) {
-      CcdCallOnConditionKeep(
-          ccsCondition,
-          reinterpret_cast<CcdVoidFn>(&on_condition_), this);
+      CcdCallOnConditionKeep(ccsCondition,
+                             reinterpret_cast<CcdVoidFn>(&on_condition_), this);
     }
   }
 
@@ -130,13 +136,13 @@ struct aggregator : public detail::aggregator_base_ {
   }
 
   virtual void on_cond(void) override {
-    CkAssert(!mNodeLevel || !mQueueLocks.empty());
+    CkAssert(!mLocksEnabled || !mQueueLocks.empty());
     for (auto pe = 0; pe < nElements; pe++) {
-      if (mNodeLevel) mQueueLocks[pe].lock();
+      if (mLocksEnabled) mQueueLocks[pe].lock();
       if (mCounts[pe] != 0 && timed_out(pe)) {
         flush(pe);
       }
-      if (mNodeLevel) mQueueLocks[pe].unlock();
+      if (mLocksEnabled) mQueueLocks[pe].unlock();
     }
   }
 
@@ -152,7 +158,7 @@ struct aggregator : public detail::aggregator_base_ {
     detail::header_ header = {.dest = dest, .size = size};
     const auto tsize = sizeof(header) + size;
     QdCreate(1);
-    if (mNodeLevel) mQueueLocks[next].lock();
+    if (mLocksEnabled) mQueueLocks[next].lock();
     auto buff = mBuffer.get_buffer(next, tsize);
     if (buff == nullptr) {
       // assume a capacity failure, and flush
@@ -173,7 +179,7 @@ struct aggregator : public detail::aggregator_base_ {
       CkAbort("pup failure");
     }
     if (should_flush(next)) flush(next);
-    if (mNodeLevel) mQueueLocks[next].unlock();
+    if (mLocksEnabled) mQueueLocks[next].unlock();
   }
 
   virtual void send(const int& dest, const msg_size_t& size,
@@ -190,6 +196,7 @@ struct aggregator : public detail::aggregator_base_ {
 
  private:
   bool mNodeLevel;
+  bool mLocksEnabled;
   int nElements;
   double mUtilizationCap;
   double mFlushTimeout;
@@ -203,6 +210,101 @@ struct aggregator : public detail::aggregator_base_ {
 
   static void on_condition_(void* self) {
     static_cast<detail::aggregator_base_*>(self)->on_cond();
+  }
+};
+
+namespace detail {
+template <typename... Ts>
+using front_t = typename std::enable_if<
+    sizeof...(Ts) >= 1,
+    typename std::tuple_element<0, std::tuple<Ts...>>::type>::type;
+
+template <typename... Ts>
+constexpr bool is_message_t(void) {
+  return (sizeof...(Ts) == 1) &&
+         std::is_base_of<CkMessage, typename std::remove_pointer<
+                                        front_t<Ts...>>::type>::value;
+}
+
+template <typename... Ts>
+using wrap_msg_t = typename std::conditional<is_message_t<Ts...>(),
+                                             CkMarshalledMessage, Ts...>::type;
+}
+
+template <typename Buffer, typename Router, typename... Ts>
+struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
+                                            detail::wrap_msg_t<Ts...>> {
+  using buffer_arg_t = typename Buffer::arg_t;
+  using parent_t =
+      aggregator<Buffer, Router, int, CkArrayIndex, detail::wrap_msg_t<Ts...>>;
+
+  array_aggregator(const CkArrayID& id, int entryIndex, const buffer_arg_t& arg,
+                   double utilizationCap, double flushTimeout,
+                   bool enableLocks = false, int ccsCondition = CcdIGNOREPE)
+      : parent_t(arg, utilizationCap, flushTimeout,
+                 make_endpoint_fn_(id, entryIndex), false, enableLocks,
+                 ccsCondition),
+        mArray(static_cast<CkArray*>(_localBranch(id))) {
+    CkAssert(mArray != nullptr);
+  }
+
+  inline void send(const CkArrayIndex& idx, const Ts&... const_ts) {
+    // use tag dispatching based on whether we're in message mode or not
+    this->send(idx, const_ts...,
+               typename std::integral_constant<bool, message_mode_>::type());
+  }
+
+  inline void send(const CkArrayIndex& idx, const Ts&... const_ts,
+                   std::false_type) {
+    parent_t::send(CkMyPe(), mArray->lastKnown(idx), idx, const_ts...);
+  }
+
+  inline void send(const CkArrayIndex& idx, const Ts&... const_ts,
+                   std::true_type) {
+    parent_t::send(CkMyPe(), mArray->lastKnown(idx), idx,
+                   CkMarshalledMessage{const_ts...});
+  }
+
+  inline void send(const CProxyElement_ArrayElement& element,
+                   const Ts&... const_ts) {
+    CkAssert(CkArrayID{mArray->getGroupID()} == (CkArrayID)element);
+    this->send(element.ckGetIndex(), const_ts...);
+  }
+
+ private:
+  CkArray* mArray;
+
+  static constexpr bool message_mode_ = detail::is_message_t<Ts...>();
+
+  static inline endpoint_fn_t make_endpoint_fn_(const CkArrayID& id,
+                                                const int& entryIndex) {
+    return [id, entryIndex](const msg_size_t& sz, char* begin) {
+      // tuples are currently pup'd in reverse so we grab the idx from the end
+      const auto end = begin + sz - sizeof(CkArrayIndex) - sizeof(int);
+      const auto& idx = *(reinterpret_cast<CkArrayIndex*>(end));
+      const auto& src = *(reinterpret_cast<int*>(end + sizeof(CkArrayIndex)));
+      auto& arr = *(static_cast<CkArray*>(_localBranch(id)));
+
+      CkMessage* msg;
+      if (message_mode_) {
+        PUP::fromMem p(begin);
+        CkPupMessage(p, reinterpret_cast<void**>(&msg), 1);
+      } else {
+        msg = CkAllocateMarshallMsg(sz - sizeof(CkArrayIndex));
+        std::copy(begin, end, ((CkMarshallMsg*)msg)->msgBuf);
+      }
+
+      auto env = UsrToEnv(static_cast<void*>(msg));
+      env->setMsgtype(ForArrayEltMsg);
+      env->setArrayMgr((CkGroupID)id);
+      env->setRecipientID(ck::ObjID(0));
+      env->getsetArraySrcPe() = src;
+      env->setEpIdx(entryIndex);
+      env->getsetArrayHops() = 2 * (arr.lookup(idx) == nullptr);
+      CkSetMsgArrayIfNotThere(msg);
+
+      arr.deliver(msg, idx, CkDeliver_queue, 0);
+    };
   }
 };
 

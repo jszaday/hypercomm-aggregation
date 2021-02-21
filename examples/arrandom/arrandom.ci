@@ -1,26 +1,23 @@
-mainmodule hello {
+mainmodule arrandom {
     mainchare Main {
         entry [nokeep] Main(CkArgMsg*);
     };
 
+    message PacketMsg {
+        char payload[];
+    };
+
     template<typename Value>
-#ifdef NODE_LEVEL
-    nodegroup Transceivers {
-#else
-    group Transceivers {
-#endif
-        entry Transceivers(int);
+    array [1D] Transceivers {
+        entry Transceivers(int, int);
         entry [inline] void receive_value(const Value&);
+        entry [inline] void receive_value(PacketMsg*);
         entry void send_values(void);
         entry void contribute_count(void);
         entry [reductiontarget] void check_count(int);
     }
 
-#ifdef NODE_LEVEL
-    nodegroup Transceivers<double>;
-#else
-    group Transceivers<double>;
-#endif
+    array [1D] Transceivers<double>;
 
     namespace aggregation {
         initproc void initialize(void);
