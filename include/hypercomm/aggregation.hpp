@@ -1,6 +1,10 @@
 #ifndef __HYPERCOMM_AGGREGATION_HPP__
 #define __HYPERCOMM_AGGREGATION_HPP__
 
+#ifndef HYPERCOMM_NODE_AWARE
+#define HYPERCOMM_NODE_AWARE 1
+#endif
+
 #include <map>
 #include <ck.h>
 #include <deque>
@@ -74,7 +78,7 @@ struct aggregator : public detail::aggregator_base_ {
              double flushTimeout, const endpoint_fn_t& endpoint, bool nodeLevel,
              bool enableLocks, int ccsCondition)
       : mNodeLevel(nodeLevel),
-        nElements(CkNumNodes()),
+        nElements(HYPERCOMM_NODE_AWARE ? CkNumNodes() : CkNumPes()),
         mUtilizationCap(utilizationCap),
         mFlushTimeout(flushTimeout),
         mBuffer(arg, 3 * sizeof(int), nElements),
@@ -124,11 +128,12 @@ struct aggregator : public detail::aggregator_base_ {
 
     CmiSetHandler(env, CkpvAccess(bundle_idx_));
 
-    if (node == CmiMyNode()) {
-      CsdNodeEnqueue(env);
-    } else {
+    if (ndLvl || HYPERCOMM_NODE_AWARE) {
       CmiSyncNodeSendAndFree(node, env->getTotalsize(),
                              reinterpret_cast<char*>(env));
+    } else {
+      CmiSyncSendAndFree(node, env->getTotalsize(),
+                         reinterpret_cast<char*>(env));
     }
 
     mLastFlush[node] = CkWallTimer();
@@ -148,8 +153,8 @@ struct aggregator : public detail::aggregator_base_ {
 
   template <typename Fn>
   inline void send(const int& dest, const msg_size_t& size, const Fn& pupFn) {
-    const auto destNode = mNodeLevel ? dest : CkNodeOf(dest);
-    const auto mine = CkMyNode();
+    const auto destNode = (mNodeLevel || !HYPERCOMM_NODE_AWARE) ? dest : CkNodeOf(dest);
+    const auto mine = HYPERCOMM_NODE_AWARE ? CkMyNode() : CkMyPe();
     // query the router about where we should send the value
     auto next = mRouter.next(mine, destNode);
     // route it directly to our send queue if it would go to us
