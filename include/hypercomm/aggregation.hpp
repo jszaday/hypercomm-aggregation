@@ -154,7 +154,7 @@ struct aggregator : public detail::aggregator_base_ {
   template <typename Fn>
   inline void send(const int& dest, const msg_size_t& size, const Fn& pupFn) {
     const auto destNode = (mNodeLevel || !HYPERCOMM_NODE_AWARE) ? dest : CkNodeOf(dest);
-    const auto mine = HYPERCOMM_NODE_AWARE ? CkMyNode() : CkMyPe();
+    const auto mine = (mNodeLevel || HYPERCOMM_NODE_AWARE) ? CkMyNode() : CkMyPe();
     // query the router about where we should send the value
     auto next = mRouter.next(mine, destNode);
     // route it directly to our send queue if it would go to us
