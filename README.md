@@ -38,3 +38,10 @@ proxy->ckLocalBranch()->aggregator->send(idx, ...);
 ```
 
 In node-level scenarios, the aggregator is thread-safe and does not need an external lock 😊
+
+## Compile-Time Options
+
+Hypercomm has a handful of compile-time configuration options:
+
+- `HYPERCOMM_NODE_AWARE` — A boolean flag (0 or 1) that indicates whether the aggregator should be node-aware in SMP scenarios.
+- `HYPERCOMM_TRACING_ON` — Enables Hypercomm's internal tracing routines, this generates various end-of-run summary statistics.
