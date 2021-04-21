@@ -22,7 +22,7 @@ void unbundle_(envelope* env);
 void bundle_handler_(void* msg) {
   envelope* env = static_cast<envelope*>(msg);
   int& nodeLevel = *(reinterpret_cast<int*>(EnvToUsr(env)));
-#if CMK_SMP
+#if CMK_SMP && HYPERCOMM_NODE_AWARE
   auto nRanks = CmiNodeSize(CmiMyNode());
   if (!nodeLevel && nRanks > 1) {
     // set node level to indicate the receivers are piranhas
@@ -35,7 +35,7 @@ void bundle_handler_(void* msg) {
   } else {
 #endif
     unbundle_(env);
-#if CMK_SMP
+#if CMK_SMP && HYPERCOMM_NODE_AWARE
   }
 #endif
 }

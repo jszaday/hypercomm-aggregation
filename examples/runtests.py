@@ -80,7 +80,8 @@ pwd = os.path.dirname(os.path.realpath(__file__))
 
 pes = range(1, max_pes + 1)
 all_opts = [ list(x) for x in powerset([ \
-    "-DDIRECT_ROUTE", "-DNODE_LEVEL", "-DDIRECT_BUFFER", "-DINLINE_SEND", "-DRANDOMIZE_SENDS" ]) ]
+    "-DDIRECT_ROUTE", "-DNODE_LEVEL", "-DDIRECT_BUFFER",
+    "-DINLINE_SEND", "-DRANDOMIZE_SENDS", "-DHYPERCOMM_NODE_AWARE=0" ]) ]
 all_opts = [ [ "-DHYPERCOMM_TRACING_ON" ] ] + all_opts
 num_tests = len(all_opts) * sum( len(list(get_factors(p))) for p in pes )
 for opts in all_opts:
