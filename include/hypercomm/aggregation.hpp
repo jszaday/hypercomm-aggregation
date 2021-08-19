@@ -153,8 +153,10 @@ struct aggregator : public detail::aggregator_base_ {
 
   template <typename Fn>
   inline void send(const int& dest, const msg_size_t& size, const Fn& pupFn) {
-    const auto destNode = (mNodeLevel || !HYPERCOMM_NODE_AWARE) ? dest : CkNodeOf(dest);
-    const auto mine = (mNodeLevel || HYPERCOMM_NODE_AWARE) ? CkMyNode() : CkMyPe();
+    const auto destNode =
+        (mNodeLevel || !HYPERCOMM_NODE_AWARE) ? dest : CkNodeOf(dest);
+    const auto mine =
+        (mNodeLevel || HYPERCOMM_NODE_AWARE) ? CkMyNode() : CkMyPe();
     // query the router about where we should send the value
     auto next = mRouter.next(mine, destNode);
     // route it directly to our send queue if it would go to us
@@ -315,9 +317,24 @@ struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
 
 class direct_buffer {
   // this tuple represents <envelope, start, current>
-  std::vector<std::tuple<envelope*, char*, char*>> mQueues;
+  using buffer_t = std::tuple<envelope*, char*, char*>;
+
+  std::vector<buffer_t> mQueues;
   std::size_t mHeaderSize;
   std::size_t mBufferSize;
+
+  buffer_t& get_buffer(const int& pe) {
+    auto& buffer = mQueues[pe];
+    auto& env = std::get<0>(buffer);
+    if (env == nullptr) {
+      auto& start = std::get<1>(buffer);
+      auto& current = std::get<2>(buffer);
+      env = _allocEnv(CkEnvelopeType::ForBocMsg, mBufferSize);
+      start = static_cast<char*>(EnvToUsr(env));
+      current = start + mHeaderSize;
+    }
+    return buffer;
+  }
 
  public:
   using arg_t = std::size_t;
@@ -326,45 +343,42 @@ class direct_buffer {
                 const int& nPes)
       : mBufferSize(bufferSize), mHeaderSize(headerSize) {
     for (auto i = 0; i < nPes; i++) {
-      auto env = _allocEnv(CkEnvelopeType::ForBocMsg, mBufferSize);
-      auto start = static_cast<char*>(EnvToUsr(env));
-      mQueues.emplace_back(env, start, start + mHeaderSize);
+      mQueues.emplace_back(nullptr, nullptr, nullptr);
     }
   }
 
   ~direct_buffer() {
-    for (auto& queue : mQueues) {
-      CmiFree(std::get<0>(queue));
+    for (auto& buffer : mQueues) {
+      auto& env = std::get<0>(buffer);
+      if (env) CmiFree(env);
     }
   }
 
   char* get_buffer(const int& pe, const std::size_t& sz) {
-    if ((size(pe) + sz) > mBufferSize) {
+    auto& buffer = this->get_buffer(pe);
+    if ((size(buffer) + sz) > mBufferSize) {
       return nullptr;
     } else {
-      auto current = std::get<2>(mQueues[pe]);
-      std::get<2>(mQueues[pe]) += sz;
+      auto current = std::get<2>(buffer);
+      std::get<2>(buffer) += sz;
       return current;
     }
   }
 
   envelope* flush(const int& pe) {
-    envelope* env = std::get<0>(mQueues[pe]);
-    env->setUsersize(size(pe));
-    std::get<0>(mQueues[pe]) =
-        _allocEnv(CkEnvelopeType::ForBocMsg, mBufferSize);
-    std::get<1>(mQueues[pe]) =
-        static_cast<char*>(EnvToUsr(std::get<0>(mQueues[pe])));
-    std::get<2>(mQueues[pe]) = std::get<1>(mQueues[pe]) + mHeaderSize;
+    auto& buffer = mQueues[pe];
+    envelope* env = std::get<0>(buffer);
+    env->setUsersize(size(buffer));
+    buffer = std::make_tuple(nullptr, nullptr, nullptr);
     return env;
   }
 
-  inline std::size_t size(const int& pe) {
-    return std::get<2>(mQueues[pe]) - std::get<1>(mQueues[pe]);
+  inline static std::size_t size(const buffer_t& buffer) {
+    return static_cast<std::size_t>(std::get<2>(buffer) - std::get<1>(buffer));
   }
 
   inline float utilization(const int& pe) {
-    return size(pe) / ((float)mBufferSize);
+    return size(this->mQueues[pe]) / ((float)mBufferSize);
   }
 };
 
