@@ -2,7 +2,7 @@
 # Hypercomm::Aggregation Library
 
 ## Introduction
-This is the aggregation/aggregator component of the Hypercomm suite of libraries for Charm++. It supports virtual routing, and chare-arrays, chare-groups, and chare-node-groups.
+This is the aggregation/aggregator component of the [Hypercomm suite of libraries](https://github.com/jszaday/hypercomm) for Charm++. It supports virtual routing, and chare-arrays, chare-groups, and chare-node-groups.
 
 ## Usage
 To use the library, declare an `initproc` calling `aggregation::initialize` within your `.ci` file:
