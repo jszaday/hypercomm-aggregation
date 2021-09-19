@@ -70,7 +70,7 @@ envelope *pack_stats_(stats_registry_t &reg) {
   auto env = _allocEnv(CkEnvelopeType::ForBocMsg, size);
   PUP::toMem p((char *)EnvToUsr(env));
   p | reg;
-  CkAssertMsg(size == p.size(), "pup error!");
+  CkAssert(size == p.size() && "pup error!");
   return env;
 }
 
