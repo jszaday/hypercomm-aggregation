@@ -39,6 +39,9 @@ proxy->ckLocalBranch()->aggregator->send(idx, ...);
 
 In node-level scenarios, the aggregator is thread-safe and does not need an external lock 😊
 
+## Usage Notes
+All PEs should initialize all their aggregators in the same order, creating one instance for each endpoint per PE (e.g., ep1 then ep2 for all PEs). This is to ensure their sequential IDs are assigned consistently. In the future, we may add an option for users to specify an endpoint ID. We recommend using a node/group or `Ckpv` variables to hold aggregators, then accessing them via the `ckLocalBranch` or `CkpvAccess` respectively. 
+
 ## Compile-Time Options
 
 Hypercomm has a handful of compile-time configuration options:
