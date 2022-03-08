@@ -5,13 +5,14 @@
 #define HYPERCOMM_NODE_AWARE 1
 #endif
 
-#include <map>
 #include <ck.h>
+
 #include <deque>
-#include <mutex>
-#include <tuple>
-#include <numeric>
 #include <functional>
+#include <map>
+#include <mutex>
+#include <numeric>
+#include <tuple>
 
 namespace aggregation {
 
@@ -27,8 +28,8 @@ struct aggregator_base_ {
   virtual void send(const int& pe, const msg_size_t& size, char* data) = 0;
   virtual void on_cond(void) = 0;
 };
-}
-}
+}  // namespace detail
+}  // namespace aggregation
 
 PUPbytes(aggregation::detail::header_);
 
@@ -236,7 +237,7 @@ constexpr bool is_message_t(void) {
 template <typename... Ts>
 using wrap_msg_t = typename std::conditional<is_message_t<Ts...>(),
                                              CkMarshalledMessage, Ts...>::type;
-}
+}  // namespace detail
 
 template <typename Buffer, typename Router, typename... Ts>
 struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
@@ -283,15 +284,16 @@ struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
 
   static constexpr bool message_mode_ = detail::is_message_t<Ts...>();
 
-  static inline endpoint_fn_t make_endpoint_fn_(const CkArrayID& id,
+  static inline endpoint_fn_t make_endpoint_fn_(const CkArrayID& aid,
                                                 const int& entryIndex) {
-    return [id, entryIndex](const msg_size_t& sz, char* begin) {
+    return [aid, entryIndex](const msg_size_t& sz, char* begin) {
       // tuples are currently pup'd in reverse so we grab the idx from the end
       const auto end = begin + sz - sizeof(CkArrayIndex) - sizeof(int);
       const auto& idx = *(reinterpret_cast<CkArrayIndex*>(end));
       const auto& src = *(reinterpret_cast<int*>(end + sizeof(CkArrayIndex)));
-      auto& arr = *(static_cast<CkArray*>(_localBranch(id)));
-
+      auto& arr = *(static_cast<CkArray*>(_localBranch(aid)));
+      auto& locMgr = *(arr.getLocMgr());
+      // extract the message from the buffer
       CkMessage* msg;
       if (message_mode_) {
         PUP::fromMem p(begin);
@@ -300,17 +302,27 @@ struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
         msg = CkAllocateMarshallMsg(sz - sizeof(CkArrayIndex));
         std::copy(begin, end, ((CkMarshallMsg*)msg)->msgBuf);
       }
-
+      // find the element's id via the location manager
+      // TODO ( we should at least know this? but if this enforce )
+      //      ( fails... then we have to reroute the message home )
+      CmiUInt8 id;
+      CmiEnforce(locMgr.lookupID(idx, id));
+      auto objId = ck::ObjID(arr.getGroupID(), id);
+      // then set all the properties of the envelope
       auto env = UsrToEnv(static_cast<void*>(msg));
       env->setMsgtype(ForArrayEltMsg);
-      env->setArrayMgr((CkGroupID)id);
-      env->setRecipientID(ck::ObjID(0));
+      env->setArrayMgr(objId.getCollectionID());
+      env->setRecipientID(objId);
       env->getsetArraySrcPe() = src;
       env->setEpIdx(entryIndex);
-      env->getsetArrayHops() = 2 * (arr.lookup(idx) == nullptr);
+      env->getsetArrayHops() = 0;
       CkSetMsgArrayIfNotThere(msg);
-
-      arr.deliver(msg, idx, CkDeliver_queue, 0);
+      // then deliver the message to the element
+#if ((CHARM_VERSION_MAJOR >= 7) && (CHARM_VERSION_MINOR >= 1))
+      arr.deliver((CkArrayMessage*)msg, CkDeliver_queue);
+#else
+      arr.deliver((CkArrayMessage*)msg, idx, CkDeliver_queue, 0);
+#endif
     };
   }
 };
@@ -433,6 +445,6 @@ class dynamic_buffer {
     return ((float)mQueues[pe].size()) / mMaxMsgs;
   }
 };
-}
+}  // namespace aggregation
 
 #endif
