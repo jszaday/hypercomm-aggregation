@@ -306,7 +306,7 @@ struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
       // TODO ( we should at least know this? but if this enforce )
       //      ( fails... then we have to reroute the message home )
       CmiUInt8 id;
-      CkEnforce(locMgr.lookupID(idx, id));
+      CmiEnforce(locMgr.lookupID(idx, id));
       auto objId = ck::ObjID(arr.getGroupID(), id);
       // then set all the properties of the envelope
       auto env = UsrToEnv(static_cast<void*>(msg));
