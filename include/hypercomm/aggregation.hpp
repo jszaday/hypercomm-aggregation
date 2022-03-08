@@ -318,10 +318,10 @@ struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
       env->getsetArrayHops() = 0;
       CkSetMsgArrayIfNotThere(msg);
       // then deliver the message to the element
-#if (CHARM_VERSION > 70000)
+#if ((CHARM_VERSION_MAJOR >= 7) && (CHARM_VERSION_MINOR >= 1))
       arr.deliver((CkArrayMessage*)msg, CkDeliver_queue);
 #else
-      arr.deliver(msg, idx, CkDeliver_queue, 0);
+      arr.deliver((CkArrayMessage*)msg, idx, CkDeliver_queue, 0);
 #endif
     };
   }
