@@ -14,6 +14,11 @@
 #include <numeric>
 #include <tuple>
 
+// TODO(jszaday): this line should be corrected once a version
+//                of charm++ after v7.0.0 is released. it can't
+//                be correctly defined for now :(
+#define HYPERCOMM_CHARM_PAST_V_7_0_0 CHARM_VERSION_MAJOR >= 7
+
 namespace aggregation {
 
 using msg_size_t = std::uint32_t;
@@ -94,8 +99,15 @@ struct aggregator : public detail::aggregator_base_ {
     }
 
     if (ccsCondition != CcdIGNOREPE) {
+// TODO(jszaday): correct this to versions AFTER v7.0.0 once
+//                the minor/patch versions have been updated
+#if HYPERCOMM_CHARM_PAST_V_7_0_0
+      CcdCallOnConditionKeep(ccsCondition,
+                             reinterpret_cast<CcdCondFn>(&on_condition_), this);
+#else
       CcdCallOnConditionKeep(ccsCondition,
                              reinterpret_cast<CcdVoidFn>(&on_condition_), this);
+#endif
     }
   }
 
@@ -216,7 +228,11 @@ struct aggregator : public detail::aggregator_base_ {
   std::deque<double> mLastFlush;
   std::deque<std::mutex> mQueueLocks;
 
+#if HYPERCOMM_CHARM_PAST_V_7_0_0
   static void on_condition_(void* self) {
+#else
+  static void on_condition_(void* self, double _) {
+#endif
     static_cast<detail::aggregator_base_*>(self)->on_cond();
   }
 };
@@ -318,7 +334,7 @@ struct array_aggregator : public aggregator<Buffer, Router, int, CkArrayIndex,
       env->getsetArrayHops() = 0;
       CkSetMsgArrayIfNotThere(msg);
       // then deliver the message to the element
-#if ((CHARM_VERSION_MAJOR >= 7) && (CHARM_VERSION_MINOR >= 1))
+#if HYPERCOMM_CHARM_PAST_V_7_0_0
       arr.deliver((CkArrayMessage*)msg, CkDeliver_queue);
 #else
       arr.deliver((CkArrayMessage*)msg, idx, CkDeliver_queue, 0);
