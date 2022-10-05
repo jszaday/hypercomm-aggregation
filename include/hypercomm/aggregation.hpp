@@ -99,8 +99,6 @@ struct aggregator : public detail::aggregator_base_ {
     }
 
     if (ccsCondition != CcdIGNOREPE) {
-// TODO(jszaday): correct this to versions AFTER v7.0.0 once
-//                the minor/patch versions have been updated
 #if HYPERCOMM_CHARM_PAST_V_7_0_0
       CcdCallOnConditionKeep(ccsCondition,
                              reinterpret_cast<CcdCondFn>(&on_condition_), this);
@@ -229,11 +227,11 @@ struct aggregator : public detail::aggregator_base_ {
   std::deque<std::mutex> mQueueLocks;
 
 #if HYPERCOMM_CHARM_PAST_V_7_0_0
-  static void on_condition_(void* self) {
+  static void on_condition_(void* userParam) {
 #else
-  static void on_condition_(void* self, double _) {
+  static void on_condition_(void* userParam, double currWallTime) {
 #endif
-    static_cast<detail::aggregator_base_*>(self)->on_cond();
+    static_cast<detail::aggregator_base_*>(userParam)->on_cond();
   }
 };
 
